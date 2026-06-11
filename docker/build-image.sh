@@ -1,10 +1,11 @@
 #!/bin/bash
 #
-# Build script for llama-swap-docker with commit hash pinning
+# Build script for llama-swap Docker images
 #
 # Usage:
-#   ./build-image.sh --cuda                    # Build CUDA image
-#   ./build-image.sh --vulkan                  # Build Vulkan image
+#   ./build-image.sh --cuda                    # Build full CUDA image
+#   ./build-image.sh --vulkan                  # Build full Vulkan image
+#   ./build-image.sh --slim                    # Build slim image (llama-swap only)
 #   ./build-image.sh --cuda --no-cache         # Build CUDA image without cache
 #   LLAMA_COMMIT_HASH=abc123 ./build-image.sh --cuda      # Override llama.cpp commit
 #   LLAMA_COMMIT_HASH=b8429 ./build-image.sh --vulkan    # Override llama.cpp release tag (vulkan uses prebuilt binaries)
@@ -12,79 +13,182 @@
 #   SD_COMMIT_HASH=ghi789 ./build-image.sh --cuda        # Override stable-diffusion.cpp commit
 #
 # Features:
-#   - Auto-detects latest commit hashes from git repos
+#   - Auto-detects latest commit hashes from git repos (full images)
 #   - Builds llama-swap from local source code
 #   - Allows environment variable overrides for reproducible builds
 #   - Cache-friendly: changing commit hash busts cache appropriately
 #   - Supports both CUDA and Vulkan backends (requires explicit flag)
+#   - Slim image: ships only llama-swap + docker-cli + nvidia-smi
+#
+# Slim image:
+#   The slim image contains only the llama-swap binary with Docker CLI and
+#   nvidia-smi for sidecar orchestration and GPU monitoring. No AI inference
+#   engines are included. Ideal for setups where inference backends run
+#   externally or are managed as separate containers.
 #
 
 set -euo pipefail
 
 # Parse command line arguments
-BACKEND=""
+MODE=""
 NO_CACHE=false
 
 if [[ $# -eq 0 ]]; then
-    echo "Error: No backend specified. Please use --cuda or --vulkan."
+    echo "Error: No mode specified. Please use --cuda, --vulkan, or --slim."
     echo ""
-    echo "Usage: ./build-image.sh --cuda|--vulkan [--no-cache]"
+    echo "Usage: ./build-image.sh --cuda|--vulkan|--slim [--no-cache]"
     echo ""
     echo "Options:"
-    echo "  --cuda      Build CUDA image (NVIDIA GPUs)"
-    echo "  --vulkan    Build Vulkan image (AMD GPUs and compatible hardware)"
+    echo "  --cuda      Build full CUDA image (NVIDIA GPUs, includes all AI engines)"
+    echo "  --vulkan    Build full Vulkan image (AMD GPUs, includes all AI engines)"
+    echo "  --slim      Build slim image (llama-swap only, no AI engines)"
     echo "  --no-cache  Force rebuild without using Docker cache"
     echo "  --help, -h  Show this help message"
     echo ""
     echo "Environment variables:"
-    echo "  DOCKER_IMAGE_TAG     Set custom image tag (default: llama-swap:cuda or llama-swap:vulkan)"
-    echo "  LLAMA_COMMIT_HASH    Override llama.cpp commit hash"
-    echo "  WHISPER_COMMIT_HASH  Override whisper.cpp commit hash"
-    echo "  SD_COMMIT_HASH       Override stable-diffusion.cpp commit hash"
+    echo "  DOCKER_IMAGE_TAG     Set custom image tag"
+    echo "                       (default: llama-swap:cuda, llama-swap:vulkan, or llama-swap:slim)"
+    echo "  LLAMA_COMMIT_HASH    Override llama.cpp commit hash (full images only)"
+    echo "  WHISPER_COMMIT_HASH  Override whisper.cpp commit hash (full images only)"
+    echo "  SD_COMMIT_HASH       Override stable-diffusion.cpp commit hash (full images only)"
     exit 1
 fi
 
 for arg in "$@"; do
     case $arg in
         --cuda)
-            BACKEND="cuda"
+            MODE="cuda"
             ;;
         --vulkan)
-            BACKEND="vulkan"
+            MODE="vulkan"
+            ;;
+        --slim)
+            MODE="slim"
             ;;
         --no-cache)
             NO_CACHE=true
             ;;
         --help|-h)
-            echo "Usage: ./build-image.sh --cuda|--vulkan [--no-cache]"
+            echo "Usage: ./build-image.sh --cuda|--vulkan|--slim [--no-cache]"
             echo ""
             echo "Options:"
-            echo "  --cuda      Build CUDA image (NVIDIA GPUs)"
-            echo "  --vulkan    Build Vulkan image (AMD GPUs and compatible hardware)"
+            echo "  --cuda      Build full CUDA image (NVIDIA GPUs, includes all AI engines)"
+            echo "  --vulkan    Build full Vulkan image (AMD GPUs, includes all AI engines)"
+            echo "  --slim      Build slim image (llama-swap only, no AI engines)"
             echo "  --no-cache  Force rebuild without using Docker cache"
             echo "  --help, -h  Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  DOCKER_IMAGE_TAG     Set custom image tag (default: llama-swap:cuda or llama-swap:vulkan)"
-            echo "  LLAMA_COMMIT_HASH    Override llama.cpp commit hash"
-            echo "  WHISPER_COMMIT_HASH  Override whisper.cpp commit hash"
-            echo "  SD_COMMIT_HASH       Override stable-diffusion.cpp commit hash"
+            echo "  DOCKER_IMAGE_TAG     Set custom image tag"
+            echo "                       (default: llama-swap:cuda, llama-swap:vulkan, or llama-swap:slim)"
+            echo "  LLAMA_COMMIT_HASH    Override llama.cpp commit hash (full images only)"
+            echo "  WHISPER_COMMIT_HASH  Override whisper.cpp commit hash (full images only)"
+            echo "  SD_COMMIT_HASH       Override stable-diffusion.cpp commit hash (full images only)"
             exit 0
             ;;
     esac
 done
 
-# Validate backend selection
-if [[ -z "$BACKEND" ]]; then
-    echo "Error: No backend specified. Please use --cuda or --vulkan."
+# Validate mode selection
+if [[ -z "$MODE" ]]; then
+    echo "Error: No mode specified. Please use --cuda, --vulkan, or --slim."
     exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Slim image build path (no commit hash detection, simpler build)
+# ---------------------------------------------------------------------------
+if [[ "$MODE" == "slim" ]]; then
+    if [[ -n "${DOCKER_IMAGE_TAG:-}" ]]; then
+        : # user provided custom tag
+    else
+        DOCKER_IMAGE_TAG="llama-swap:slim"
+    fi
+
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+    echo "=========================================="
+    echo "llama-swap Slim Build"
+    echo "=========================================="
+    echo ""
+    echo "Building slim image (llama-swap only, no AI engines)"
+    echo ""
+    echo "=========================================="
+    echo "Starting Docker build..."
+    echo "=========================================="
+    echo ""
+
+    # Build args for slim image
+    BUILD_ARGS=(
+        -t "${DOCKER_IMAGE_TAG}"
+        -f "${SCRIPT_DIR}/slim/Dockerfile"
+    )
+
+    if [[ "$NO_CACHE" == true ]]; then
+        BUILD_ARGS+=(--no-cache)
+        echo "Note: Building without cache"
+    fi
+
+    # Use docker buildx for multi-arch support
+    docker buildx build --load "${BUILD_ARGS[@]}" "${REPO_ROOT}"
+
+    echo ""
+    echo "=========================================="
+    echo "Verifying build artifacts..."
+    echo "=========================================="
+    echo ""
+
+    # Verify expected binaries exist in the slim image
+    MISSING_BINARIES=()
+
+    for binary in llama-swap docker nvidia-smi curl; do
+        if ! docker run --rm "${DOCKER_IMAGE_TAG}" which "${binary}" >/dev/null 2>&1; then
+            MISSING_BINARIES+=("${binary}")
+        fi
+    done
+
+    if [[ ${#MISSING_BINARIES[@]} -gt 0 ]]; then
+        echo "ERROR: Build succeeded but the following binaries are missing from the image:"
+        for binary in "${MISSING_BINARIES[@]}"; do
+            echo "  - ${binary}"
+        done
+        echo ""
+        echo "This usually indicates a build stage failure. Try running with --no-cache flag:"
+        echo "  ./build-image.sh --slim --no-cache"
+        exit 1
+    fi
+
+    echo "All expected binaries verified: llama-swap, docker, nvidia-smi, curl"
+
+    echo ""
+    echo "=========================================="
+    echo "Slim build complete!"
+    echo "=========================================="
+    echo ""
+    echo "Image tag: ${DOCKER_IMAGE_TAG}"
+    echo "llama-swap: $(docker run --rm "${DOCKER_IMAGE_TAG}" llama-swap --version 2>/dev/null || echo 'built from source')"
+    echo ""
+    echo "Run with:"
+    echo "  docker run -it --rm --gpus all \\"
+    echo "    -v /var/run/docker.sock:/var/run/docker.sock \\"
+    echo "    -v /path/to/models:/models \\"
+    echo "    ${DOCKER_IMAGE_TAG}"
+    echo ""
+    echo "Note: The slim image does not include AI inference engines."
+    echo "Configure llama-swap to use external inference backends."
+    exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Full image build path (CUDA / Vulkan, with commit hash detection)
+# ---------------------------------------------------------------------------
 
 # Configuration
 if [[ -n "${DOCKER_IMAGE_TAG:-}" ]]; then
     # User provided a custom tag, use it as-is
     :
-elif [[ "$BACKEND" == "vulkan" ]]; then
+elif [[ "$MODE" == "vulkan" ]]; then
     DOCKER_IMAGE_TAG="llama-swap:vulkan"
 else
     DOCKER_IMAGE_TAG="llama-swap:cuda"
@@ -93,7 +197,7 @@ DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
 
 # Single unified Dockerfile, backend selected via build arg
 DOCKERFILE="Dockerfile"
-if [[ "$BACKEND" == "vulkan" ]]; then
+if [[ "$MODE" == "vulkan" ]]; then
     echo "Building for: Vulkan (AMD GPUs and compatible hardware)"
 else
     echo "Building for: CUDA (NVIDIA GPUs)"
@@ -145,7 +249,7 @@ echo ""
 if [[ -n "${LLAMA_COMMIT_HASH:-}" ]]; then
     LLAMA_HASH="${LLAMA_COMMIT_HASH}"
     echo "llama.cpp: Using provided version: ${LLAMA_HASH}"
-elif [[ "$BACKEND" == "vulkan" ]]; then
+elif [[ "$MODE" == "vulkan" ]]; then
     LLAMA_HASH=$(get_latest_release_tag "ggml-org/llama.cpp")
     if [[ -z "${LLAMA_HASH}" ]]; then
         echo "ERROR: Could not determine latest release tag for llama.cpp" >&2
@@ -178,7 +282,7 @@ fi
 if [[ -n "${SD_COMMIT_HASH:-}" ]]; then
     SD_HASH="${SD_COMMIT_HASH}"
     echo "stable-diffusion.cpp: Using provided version: ${SD_HASH}"
-elif [[ "$BACKEND" == "vulkan" ]]; then
+elif [[ "$MODE" == "vulkan" ]]; then
     SD_HASH=$(get_latest_release_tag "leejet/stable-diffusion.cpp")
     if [[ -z "${SD_HASH}" ]]; then
         echo "ERROR: Could not determine latest release tag for stable-diffusion.cpp" >&2
@@ -206,7 +310,7 @@ echo ""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_ARGS=(
-    --build-arg "BACKEND=${BACKEND}"
+    --build-arg "BACKEND=${MODE}"
     --build-arg "LLAMA_COMMIT_HASH=${LLAMA_HASH}"
     --build-arg "WHISPER_COMMIT_HASH=${WHISPER_HASH}"
     --build-arg "SD_COMMIT_HASH=${SD_HASH}"
@@ -227,13 +331,13 @@ BUILDER_NAME="llama-swap-builder"
 # Check if our custom builder exists with the right config, create/update if needed
 if ! docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
     echo "Creating custom buildx builder with max-parallelism=1..."
-    
+
     # Create buildkitd.toml config file
     cat > buildkitd.toml << 'BUILDKIT_EOF'
 [worker.oci]
   max-parallelism = 1
 BUILDKIT_EOF
-    
+
     # Create the builder with the config
     docker buildx create --name "$BUILDER_NAME" \
         --driver docker-container \
@@ -293,7 +397,7 @@ echo "  whisper.cpp:         ${WHISPER_HASH}"
 echo "  stable-diffusion.cpp: ${SD_HASH}"
 echo "  llama-swap:          $(docker run --rm "${DOCKER_IMAGE_TAG}" cat /versions.txt | grep llama-swap | cut -d' ' -f2-)"
 echo ""
-if [[ "$BACKEND" == "vulkan" ]]; then
+if [[ "$MODE" == "vulkan" ]]; then
     echo "Run with:"
     echo "  docker run -it --rm --device /dev/dri:/dev/dri ${DOCKER_IMAGE_TAG}"
     echo ""
