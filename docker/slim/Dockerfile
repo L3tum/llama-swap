@@ -66,7 +66,6 @@ RUN apk add --no-cache \
     gcompat \
     curl \
     jq \
-    tini \
     && rm -rf /var/cache/apk/*
 
 # Create config directory.
@@ -85,6 +84,5 @@ RUN chmod +x /usr/local/bin/llama-swap
 # Expose the default listen port.
 EXPOSE 8080
 
-# Use tini as the init process to handle signals properly.
-ENTRYPOINT ["tini", "--"]
+ENTRYPOINT ["llama-swap"]
 CMD ["llama-swap", "-config", "/etc/llama-swap/config/config.yaml", "-listen", "0.0.0.0:8080"]
