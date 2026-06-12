@@ -4,23 +4,9 @@ on:
   release:
     types:
       - published
-  push:
-    branches: [main]
-  pull_request:
 
 jobs:
-  check-config-sync:
-    runs-on: ubuntu-latest
-    if: github.event_name != 'release'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Verify docker/slim/config.example.yaml is in sync
-        run: |
-          cp config.example.yaml docker/slim/config.example.yaml
-          echo "config.example.yaml is synced ✓"
-
   publish:
-    needs: [check-config-sync]
     if: github.event_name == 'release' && github.event.action == 'published' && github.server_url != 'https://github.com'
     uses: l3tum/reusable-workflows/.github/workflows/publish-forgejo.yml@main
     runs-on: ubuntu-latest
