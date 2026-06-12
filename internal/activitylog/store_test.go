@@ -149,7 +149,8 @@ func TestCount(t *testing.T) {
 	assert.Equal(t, 0, count)
 
 	for i := 0; i < 5; i++ {
-		_, err := store.Insert(&makeEntry(i, "model", "/path"))
+		e := makeEntry(i, "model", "/path")
+		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
 
@@ -165,7 +166,8 @@ func TestDeleteAll(t *testing.T) {
 	defer store.Close()
 
 	for i := 0; i < 5; i++ {
-		_, err := store.Insert(&makeEntry(i, "model", "/path"))
+		e := makeEntry(i, "model", "/path")
+		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
 
@@ -186,7 +188,8 @@ func TestDeleteOldest(t *testing.T) {
 
 	// Insert 10 entries
 	for i := 0; i < 10; i++ {
-		_, err := store.Insert(&makeEntry(i, fmt.Sprintf("model-%d", i), "/path"))
+		e := makeEntry(i, fmt.Sprintf("model-%d", i), "/path")
+		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
 
@@ -215,7 +218,8 @@ func TestDeleteOldestKeepZero(t *testing.T) {
 	defer store.Close()
 
 	for i := 0; i < 5; i++ {
-		_, err := store.Insert(&makeEntry(i, "model", "/path"))
+		e := makeEntry(i, "model", "/path")
+		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
 
