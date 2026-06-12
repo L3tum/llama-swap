@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: keep docker/slim/config.example.yaml in sync with the root
+# config.example.yaml so the Docker build context (SUBDIRECTORY: docker/slim)
+# always has the file the Dockerfile expects.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+#
+
+set -euo pipefail
+
+SRC="config.example.yaml"
+DST="docker/slim/config.example.yaml"
+
+# Only run if the source file exists in the working tree
+if [ ! -f "$SRC" ]; then
+    exit 0
+fi
+
+# Check whether config.example.yaml is staged (or would be in a new file)
+if git diff --cached --name-only 2>/dev/null | grep -qx "$SRC"; then
+    # Source is staged — copy and stage the destination too
+    cp "$SRC" "$DST"
+    git add "$DST"
+    echo "pre-commit: synced $SRC → $DST"
+fi
+
+exit 0
