@@ -74,7 +74,7 @@ RUN mkdir -p /etc/llama-swap/config
 
 # Copy the built binary from the builder stage.
 ARG TARGETARCH=amd64
-COPY --from=go-builder /app/llama-swap-linux-${TARGETARCH} /usr/local/bin/llama-swap
+COPY --from=go-builder /app/build/llama-swap-linux-${TARGETARCH} /usr/local/bin/llama-swap
 
 # Copy example config.
 COPY config.example.yaml /etc/llama-swap/config/config.yaml
