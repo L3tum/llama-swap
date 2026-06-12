@@ -88,15 +88,46 @@ func (s *Server) handleAPIUnloadModel(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("OK"))
 }
 
-// handleAPIMetrics serves the activity log as a JSON array.
+// handleAPIMetrics serves the activity log, optionally paginated.
+// Query params: offset (default 0), limit (default 50).
 func (s *Server) handleAPIMetrics(w http.ResponseWriter, r *http.Request) {
-	data, err := s.metrics.getMetricsJSON()
+	offset := 0
+	limit := 50
+
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if o, err := strconv.Atoi(v); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if l, err := strconv.Atoi(v); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	data, err := s.metrics.getMetricsPaginatedJSON(offset, limit)
 	if err != nil {
 		router.SendResponse(w, r, http.StatusInternalServerError, "failed to get metrics")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// handleAPIMetricsClear deletes activity log entries.
+// POST body: {"keep": N} — delete all except the most recent N.
+// Omit keep or set to 0 to delete all.
+func (s *Server) handleAPIMetricsClear(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Keep int `json:"keep"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	deleted := s.metrics.clearMetrics(req.Keep)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MetricsClearResponse{Deleted: deleted})
 }
 
 // handleAPIPerformance serves the buffered system/GPU stats, optionally
@@ -232,6 +263,18 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			send(messageEnvelope{Type: msgTypeMetrics, Data: string(j)})
 		}
 	}
+	sendMetricsSnapshot := func() {
+		entries := s.metrics.getMetricsPaginated(0, 50)
+		total := s.metrics.getMetricsCount()
+		resp := MetricsResponse{
+			Entries: entries,
+			Total:   total,
+			HasMore: len(entries) < total,
+		}
+		if j, err := json.Marshal(resp); err == nil {
+			send(messageEnvelope{Type: msgTypeMetrics, Data: string(j)})
+		}
+	}
 	sendInFlight := func(total int) {
 		if j, err := json.Marshal(map[string]int{"total": total}); err == nil {
 			send(messageEnvelope{Type: msgTypeInFlight, Data: string(j)})
@@ -249,7 +292,8 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	sendLogData("proxy", s.proxylog.GetHistory())
 	sendLogData("upstream", s.upstreamlog.GetHistory())
 	sendModels()
-	sendMetrics(s.metrics.getMetrics())
+	// Send the first page of metrics (most recent entries) as a paginated snapshot.
+	sendMetricsSnapshot()
 	sendInFlight(int(s.inflight.Current()))
 
 	for {

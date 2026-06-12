@@ -50,6 +50,12 @@ logToStdout: "proxy"
 # - useful for limiting memory usage when processing large volumes of metrics
 metricsMaxInMemory: 1000
 
+# metricsDBPath: path to a SQLite database file for persisting the activity log
+# - optional, default: "" (disabled, activity log is in-memory only)
+# - when set, activity log entries survive server restarts and config reloads
+# - example: "llama-swap-metrics.db"
+# metricsDBPath: ""
+
 # captureBuffer: how many MBs to allocate for storing request/response captures
 # - optional, default: 10
 # - set to 0 to disable

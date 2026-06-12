@@ -17,6 +17,7 @@ require (
 	github.com/tidwall/sjson v1.2.5
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.41.0
+	modernc.org/sqlite v1.34.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

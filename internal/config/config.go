@@ -123,8 +123,9 @@ type Config struct {
 	LogLevel           string                 `yaml:"logLevel"`
 	LogTimeFormat      string                 `yaml:"logTimeFormat"`
 	LogToStdout        string                 `yaml:"logToStdout"`
-	MetricsMaxInMemory int                    `yaml:"metricsMaxInMemory"`
-	CaptureBuffer      int                    `yaml:"captureBuffer"`
+	MetricsMaxInMemory int     `yaml:"metricsMaxInMemory"`
+	MetricsDBPath      string  `yaml:"metricsDBPath"` // SQLite DB path; empty = no persistence
+	CaptureBuffer      int     `yaml:"captureBuffer"`
 	Performance        PerformanceConfig      `yaml:"performance"`
 	GlobalTTL          int                    `yaml:"globalTTL"`
 	Models             map[string]ModelConfig `yaml:"models"` /* key is model ID */
