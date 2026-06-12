@@ -11,6 +11,6 @@ jobs:
     uses: l3tum/reusable-workflows/.github/workflows/publish-forgejo.yml@main
     runs-on: ubuntu-latest
     with:
-      SUBDIRECTORY: docker/slim
+      DOCKERFILE: docker/slim/Dockerfile
     secrets:
       PACKAGE_TOKEN: ${{ secrets.PACKAGE_TOKEN }}
