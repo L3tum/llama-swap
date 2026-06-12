@@ -20,6 +20,7 @@ jobs:
           echo "config.example.yaml is synced ✓"
 
   publish:
+    needs: [check-config-sync]
     if: github.event_name == 'release' && github.event.action == 'published' && github.server_url != 'https://github.com'
     uses: l3tum/reusable-workflows/.github/workflows/publish-forgejo.yml@main
     runs-on: ubuntu-latest
