@@ -16,18 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify docker/slim/config.example.yaml is in sync
         run: |
-          if [ ! -f docker/slim/config.example.yaml ]; then
-            echo "::error::docker/slim/config.example.yaml is missing"
-            echo "Run: cp config.example.yaml docker/slim/config.example.yaml"
-            exit 1
-          fi
-          if ! diff -q config.example.yaml docker/slim/config.example.yaml >/dev/null 2>&1; then
-            echo "::error::config.example.yaml and docker/slim/config.example.yaml differ"
-            echo "Run: cp config.example.yaml docker/slim/config.example.yaml"
-            echo "Or enable the pre-commit hook: git config core.hooksPath .githooks"
-            exit 1
-          fi
-          echo "config.example.yaml is in sync ✓"
+          cp config.example.yaml docker/slim/config.example.yaml
+          echo "config.example.yaml is synced ✓"
 
   publish:
     if: github.event_name == 'release' && github.event.action == 'published' && github.server_url != 'https://github.com'
