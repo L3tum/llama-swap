@@ -51,14 +51,19 @@ FROM alpine:3.21
 
 # Install runtime dependencies:
 #   docker-cli          - manage sidecar containers
-#   nvidia-utils        - provides nvidia-smi for GPU monitoring
+#   gcompat             - glibc compatibility layer; required to run the host's
+#                         nvidia-smi (a glibc binary) inside this musl-based image
 #   curl / jq           - HTTP calls and JSON parsing
 #   tini                - proper init process (PID 1)
 #   ca-certificates     - TLS verification
+#   Note: nvidia-smi is mounted by the NVIDIA Container Toolkit at runtime
+#   when the container is launched with --gpus all (NVIDIA_DRIVER_CAPABILITIES
+#   defaults to compute,utility which includes nvidia-smi). gcompat is needed
+#   because Alpine uses musl libc and nvidia-smi is a glibc binary.
 RUN apk add --no-cache \
     ca-certificates \
     docker-cli \
-    nvidia-utils \
+    gcompat \
     curl \
     jq \
     tini \
