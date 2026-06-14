@@ -185,7 +185,11 @@ func (mp *metricsMonitor) ringBufferSlice() []ActivityLogEntry {
 func (mp *metricsMonitor) storeEntriesToActivity(entries []activitylog.Entry) []ActivityLogEntry {
 	result := make([]ActivityLogEntry, len(entries))
 	for i, e := range entries {
-		ts, _ := time.Parse(time.RFC3339, e.Timestamp)
+		ts, err := time.Parse(time.RFC3339, e.Timestamp)
+		if err != nil {
+			mp.logger.Warnf("metrics: invalid timestamp %q for entry %d, using current time: %v", e.Timestamp, e.ID, err)
+			ts = time.Now()
+		}
 		result[i] = ActivityLogEntry{
 			ID:            e.ID,
 			Timestamp:     ts,
@@ -226,15 +230,50 @@ func (mp *metricsMonitor) getMetricsJSON() ([]byte, error) {
 }
 
 // getMetricsPaginatedJSON returns a paginated metrics response as JSON.
+// Both entries and total count are fetched under a single lock to avoid
+// a race where the count changes between the two calls.
 func (mp *metricsMonitor) getMetricsPaginatedJSON(offset, limit int) ([]byte, error) {
-	entries := mp.getMetricsPaginated(offset, limit)
-	total := mp.getMetricsCount()
+	entries, total := mp.getMetricsPaginatedAndCount(offset, limit)
 	resp := MetricsResponse{
 		Entries: entries,
 		Total:   total,
 		HasMore: offset+len(entries) < total,
 	}
 	return json.Marshal(resp)
+}
+
+// getMetricsPaginatedAndCount returns paginated entries and the total count
+// under a single lock, avoiding a race between the two operations.
+func (mp *metricsMonitor) getMetricsPaginatedAndCount(offset, limit int) (entries []ActivityLogEntry, total int) {
+	mp.mu.RLock()
+	defer mp.mu.RUnlock()
+
+	if mp.store != nil {
+		storeEntries, err := mp.store.Query(offset, limit)
+		if err != nil {
+			mp.logger.Warnf("metrics store query failed: %v, falling back to ring buffer", err)
+			return mp.ringBufferSlice(), mp.metrics.Len()
+		}
+		var terr error
+		total, terr = mp.store.Count()
+		if terr != nil {
+			mp.logger.Warnf("metrics store count failed: %v, falling back to ring buffer count", terr)
+			total = mp.metrics.Len()
+		}
+		entries = mp.storeEntriesToActivity(storeEntries)
+	} else {
+		entries = mp.ringBufferSlice()
+		total = mp.metrics.Len()
+	}
+
+	// Mark has_capture for entries that have a capture in the in-memory cache.
+	if mp.captureCache != nil {
+		for i := range entries {
+			entries[i].HasCapture = entries[i].HasCapture || mp.captureCache.Has(entries[i].ID)
+		}
+	}
+
+	return entries, total
 }
 
 // clearMetrics removes metrics from the store and/or ring buffer.
@@ -262,12 +301,15 @@ func (mp *metricsMonitor) clearMetrics(keep int) int {
 			}
 			deleted = n
 		}
+		// Only clear the in-memory ring buffer after confirming the store
+		// operation succeeded, to avoid losing entries on transient errors.
+		mp.metrics = ring.NewBuffer[ActivityLogEntry](mp.metrics.Cap())
+		return deleted
 	}
 
-	// Always clear the in-memory ring buffer.
+	// No persistent store — clear only the in-memory ring buffer.
 	mp.metrics = ring.NewBuffer[ActivityLogEntry](mp.metrics.Cap())
-
-	return deleted
+	return mp.metrics.Len()
 }
 
 // Close releases resources held by the metrics monitor.

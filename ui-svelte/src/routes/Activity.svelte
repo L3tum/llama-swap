@@ -54,25 +54,6 @@
   let columnsMenuOpen = $state(false);
   let dropdownContainer: HTMLDivElement | null = null;
 
-  onMount(() => {
-    function handleKeydown(e: KeyboardEvent) {
-      if (e.key === "Escape" && columnsMenuOpen) {
-        columnsMenuOpen = false;
-      }
-    }
-    function handleClick(e: MouseEvent) {
-      if (columnsMenuOpen && dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
-        columnsMenuOpen = false;
-      }
-    }
-    document.addEventListener("keydown", handleKeydown);
-    document.addEventListener("click", handleClick);
-    return () => {
-      document.removeEventListener("keydown", handleKeydown);
-      document.removeEventListener("click", handleClick);
-    };
-  });
-
   function toggleColumn(key: ColumnKey) {
     const current = $visibleColumns;
     if (current.includes(key)) {
