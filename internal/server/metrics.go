@@ -310,13 +310,40 @@ func (mp *metricsMonitor) clearMetrics(keep int) int {
 		// Only clear the in-memory ring buffer after confirming the store
 		// operation succeeded, to avoid losing entries on transient errors.
 		mp.metrics = ring.NewBuffer[ActivityLogEntry](mp.metrics.Cap())
+		mp.retainCaptureCacheAfterClear(keep)
 		return deleted
 	}
 
 	// No persistent store — clear only the in-memory ring buffer.
 	cleared := mp.metrics.Len()
 	mp.metrics = ring.NewBuffer[ActivityLogEntry](mp.metrics.Cap())
+	mp.retainCaptureCacheAfterClear(0)
 	return cleared
+}
+
+// retainCaptureCacheAfterClear removes captures for entries that were deleted
+// from the activity log so cleared history cannot still be fetched by ID.
+func (mp *metricsMonitor) retainCaptureCacheAfterClear(keep int) {
+	if mp.captureCache == nil {
+		return
+	}
+	if keep <= 0 || mp.store == nil {
+		mp.captureCache.Clear()
+		return
+	}
+
+	entries, err := mp.store.Query(0, keep)
+	if err != nil {
+		mp.logger.Warnf("metrics store query after clear failed: %v, clearing capture cache", err)
+		mp.captureCache.Clear()
+		return
+	}
+
+	ids := make(map[int]struct{}, len(entries))
+	for _, entry := range entries {
+		ids[int(entry.ID)] = struct{}{}
+	}
+	mp.captureCache.Retain(ids)
 }
 
 // Close releases resources held by the metrics monitor.

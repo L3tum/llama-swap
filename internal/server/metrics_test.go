@@ -1,11 +1,29 @@
 package server
 
 import (
+	"io"
 	"testing"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/tidwall/gjson"
 )
+
+func TestServer_ClearMetricsClearsCaptureCache(t *testing.T) {
+	mm := newMetricsMonitor(logmon.NewWriter(io.Discard), 10, 1, nil)
+	if !mm.addCapture(ReqRespCapture{ID: 1, ReqPath: "/v1/chat/completions"}) {
+		t.Fatal("addCapture returned false")
+	}
+	if capture := mm.getCaptureByID(1); capture == nil {
+		t.Fatal("capture missing before clear")
+	}
+
+	mm.clearMetrics(0)
+
+	if capture := mm.getCaptureByID(1); capture != nil {
+		t.Fatal("capture still available after clear")
+	}
+}
 
 func TestServer_ParseMetrics_ChatCompletions(t *testing.T) {
 	body := `{"usage":{"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4}}}`

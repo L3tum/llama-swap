@@ -100,3 +100,26 @@ func (c *Cache) Clear() {
 	c.order = c.order[:0]
 	c.size = 0
 }
+
+// Retain removes all entries except those whose IDs are present in ids.
+func (c *Cache) Retain(ids map[int]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	newOrder := c.order[:0]
+	newSize := 0
+	for _, id := range c.order {
+		data, exists := c.items[id]
+		if !exists {
+			continue
+		}
+		if _, keep := ids[id]; keep {
+			newOrder = append(newOrder, id)
+			newSize += len(data)
+		} else {
+			delete(c.items, id)
+		}
+	}
+	c.order = newOrder
+	c.size = newSize
+}

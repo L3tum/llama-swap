@@ -120,8 +120,8 @@
   }
 
   // Infinite scroll: load older entries when user scrolls to the bottom.
-  let sentinelEl: HTMLDivElement | null = null;
-  let observer: IntersectionObserver | null = null;
+  let sentinelEl = $state<HTMLDivElement | null>(null);
+  let observer = $state<IntersectionObserver | null>(null);
   let isLoadingMore = $state(false);
 
   onMount(() => {
@@ -168,9 +168,14 @@
   });
 
   // Re-observe sentinel when hasMore changes.
-  $: if ($metricsHasMore && sentinelEl && observer) {
-    observer.observe(sentinelEl);
-  }
+  $effect(() => {
+    const el = sentinelEl;
+    const obs = observer;
+    if (!$metricsHasMore || !el || !obs) return;
+
+    obs.observe(el);
+    return () => obs.unobserve(el);
+  });
 
   async function handleClear() {
     if (!confirm("Clear all activity history?")) return;
