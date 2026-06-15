@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/activitylog"
 	"github.com/mostlygeek/llama-swap/internal/chain"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
@@ -118,6 +119,18 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 	}
 
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
+
+	// Open persistent metrics store if configured.
+	var store *activitylog.Store
+	if cfg.MetricsDBPath != "" {
+		var err error
+		store, err = activitylog.New(cfg.MetricsDBPath)
+		if err != nil {
+			proxylog.Warnf("failed to open metrics DB: %v, activity log will not persist", err)
+			store = nil
+		}
+	}
+
 	s := &Server{
 		cfg:         cfg,
 		muxlog:      muxlog,
@@ -125,7 +138,7 @@ func New(cfg config.Config, muxlog *logmon.Monitor, proxylog *logmon.Monitor, up
 		upstreamlog: upstreamlog,
 		perf:        perfMon,
 		inflight:    &inflightCounter{},
-		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer),
+		metrics:     newMetricsMonitor(proxylog, cfg.MetricsMaxInMemory, cfg.CaptureBuffer, store, cfg.MetricsMaxInDB),
 		build:       build,
 		local:       local,
 		peer:        peer,
@@ -235,6 +248,7 @@ func (s *Server) routes() {
 	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
 	mux.Handle("GET /api/events", apiChain.ThenFunc(s.handleAPIEvents))
 	mux.Handle("GET /api/metrics", apiChain.ThenFunc(s.handleAPIMetrics))
+	mux.Handle("POST /api/metrics/clear", apiChain.ThenFunc(s.handleAPIMetricsClear))
 	mux.Handle("GET /api/performance", apiChain.ThenFunc(s.handleAPIPerformance))
 	mux.Handle("GET /api/version", apiChain.ThenFunc(s.handleAPIVersion))
 	mux.Handle("GET /api/captures/{id}", apiChain.ThenFunc(s.handleAPICapture))
@@ -266,6 +280,11 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 		return nil
 	}
 	s.shutdownFn()
+
+	// Close the metrics monitor (flushes/closes the persistent store).
+	if s.metrics != nil {
+		s.metrics.Close()
+	}
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex

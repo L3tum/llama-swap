@@ -32,6 +32,16 @@ export interface ActivityLogEntry {
   has_capture: boolean;
 }
 
+export interface MetricsResponse {
+  entries: ActivityLogEntry[];
+  total: number;
+  hasMore: boolean;
+}
+
+export interface MetricsClearResponse {
+  deleted: number;
+}
+
 export interface ReqRespCapture {
   id: number;
   req_path: string;

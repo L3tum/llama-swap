@@ -57,8 +57,18 @@ func TestServer_APIMetrics_Empty(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d", w.Code)
 	}
-	if body := strings.TrimSpace(w.Body.String()); body != "[]" {
-		t.Errorf("body = %q, want []", body)
+	var resp MetricsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v body=%q", err, w.Body.String())
+	}
+	if len(resp.Entries) != 0 {
+		t.Errorf("entries = %d, want 0", len(resp.Entries))
+	}
+	if resp.Total != 0 {
+		t.Errorf("total = %d, want 0", resp.Total)
+	}
+	if resp.HasMore {
+		t.Errorf("hasMore = true, want false")
 	}
 }
 

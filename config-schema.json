@@ -208,6 +208,17 @@
             "default": 1000,
             "description": "Maximum number of metrics to keep in memory. Controls how many metrics are stored before older ones are discarded."
         },
+        "metricsDBPath": {
+            "type": "string",
+            "default": "",
+            "description": "Path to a SQLite database file for persisting the activity log. When set, activity log entries survive server restarts and config reloads. Empty (default) disables persistence."
+        },
+        "metricsMaxInDB": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0,
+            "description": "Maximum number of metrics to keep in the SQLite activity log database. Set to 0 to keep all persisted metrics."
+        },
         "captureBuffer": {
             "type": "integer",
             "minimum": 0,

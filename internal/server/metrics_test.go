@@ -1,11 +1,76 @@
 package server
 
 import (
+	"fmt"
+	"io"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/mostlygeek/llama-swap/internal/activitylog"
+	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/tidwall/gjson"
 )
+
+func TestServer_ClearMetricsClearsCaptureCache(t *testing.T) {
+	mm := newMetricsMonitor(logmon.NewWriter(io.Discard), 10, 1, nil, 0)
+	if !mm.addCapture(ReqRespCapture{ID: 1, ReqPath: "/v1/chat/completions"}) {
+		t.Fatal("addCapture returned false")
+	}
+	if capture := mm.getCaptureByID(1); capture == nil {
+		t.Fatal("capture missing before clear")
+	}
+
+	mm.clearMetrics(0)
+
+	if capture := mm.getCaptureByID(1); capture != nil {
+		t.Fatal("capture still available after clear")
+	}
+}
+
+func TestServer_MetricsDBPrunesOldEntries(t *testing.T) {
+	f, err := os.CreateTemp("", "llama-swap-metrics-prune-*.db")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	path := f.Name()
+	f.Close()
+	defer os.Remove(path)
+
+	store, err := activitylog.New(path)
+	if err != nil {
+		t.Fatalf("activitylog.New: %v", err)
+	}
+	mm := newMetricsMonitor(logmon.NewWriter(io.Discard), 10, 0, store, 3)
+	defer mm.Close()
+
+	for i := 0; i < 6; i++ {
+		mm.queueMetrics(ActivityLogEntry{
+			Timestamp: time.Now(),
+			Model:     fmt.Sprintf("model-%d", i),
+			ReqPath:   "/v1/chat/completions",
+		})
+	}
+
+	count, err := store.Count()
+	if err != nil {
+		t.Fatalf("Count: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("Count = %d, want 3", count)
+	}
+
+	entries, err := store.Query(0, 10)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("len(entries) = %d, want 3", len(entries))
+	}
+	if entries[0].Model != "model-5" || entries[2].Model != "model-3" {
+		t.Fatalf("remaining entries = %+v, want newest three", entries)
+	}
+}
 
 func TestServer_ParseMetrics_ChatCompletions(t *testing.T) {
 	body := `{"usage":{"prompt_tokens":12,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":4}}}`

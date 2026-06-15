@@ -8,16 +8,25 @@ import type {
   ReqRespCapture,
   InFlightStats,
   PerformanceResponse,
+  MetricsResponse,
+  MetricsClearResponse,
 } from "../lib/types";
 import { connectionState } from "./theme";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
+const METRICS_PAGE_SIZE = 50;
 
 // Stores
 export const models = writable<Model[]>([]);
 export const proxyLogs = writable<string>("");
 export const upstreamLogs = writable<string>("");
 export const metrics = writable<ActivityLogEntry[]>([]);
+export const metricsTotal = writable<number>(0);
+export const metricsHasMore = writable<boolean>(false);
+export const metricsLoading = writable<boolean>(false);
+// Persistent subscription to read current metrics value without subscribe() anti-pattern.
+let currentMetricsValue: ActivityLogEntry[] = [];
+metrics.subscribe((v) => { currentMetricsValue = v; });
 export const inFlightRequests = writable<number>(0);
 export const versionInfo = writable<VersionInfo>({
   build_date: "unknown",
@@ -39,6 +48,8 @@ export function enableAPIEvents(enabled: boolean): void {
     apiEventSource?.close();
     apiEventSource = null;
     metrics.set([]);
+    metricsTotal.set(0);
+    metricsHasMore.set(false);
     inFlightRequests.set(0);
     return;
   }
@@ -57,6 +68,8 @@ export function enableAPIEvents(enabled: boolean): void {
       proxyLogs.set("");
       upstreamLogs.set("");
       metrics.set([]);
+      metricsTotal.set(0);
+      metricsHasMore.set(false);
       inFlightRequests.set(0);
       models.set([]);
       retryCount = 0;
@@ -91,8 +104,20 @@ export function enableAPIEvents(enabled: boolean): void {
           }
 
           case "metrics": {
-            const newMetrics = JSON.parse(message.data) as ActivityLogEntry[];
-            metrics.update((prevMetrics) => [...newMetrics, ...prevMetrics]);
+            // The server sends either a paginated MetricsResponse or a plain
+            // ActivityLogEntry[] (legacy / real-time single-entry push).
+            const parsed = JSON.parse(message.data);
+            if (Array.isArray(parsed)) {
+              // Real-time push: prepend new entries
+              const newMetrics = parsed as ActivityLogEntry[];
+              metrics.update((prevMetrics) => [...newMetrics, ...prevMetrics]);
+            } else {
+              // Paginated initial snapshot
+              const resp = parsed as MetricsResponse;
+              metrics.set(resp.entries);
+              metricsTotal.set(resp.total);
+              metricsHasMore.set(resp.hasMore);
+            }
             break;
           }
           case "inflight": {
@@ -217,5 +242,64 @@ export async function fetchPerformance(after?: string): Promise<PerformanceRespo
   } catch (error) {
     console.error("Failed to fetch performance data:", error);
     return null;
+  }
+}
+
+/**
+ * Load more activity metrics (older entries). Appends them to the current list.
+ */
+export async function loadMoreMetrics(): Promise<boolean> {
+  metricsLoading.set(true);
+  try {
+    // Determine current offset from the metrics store length.
+    const offset = currentMetricsValue.length;
+
+    const response = await fetch(`/api/metrics?offset=${offset}&limit=${METRICS_PAGE_SIZE}`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data: MetricsResponse = await response.json();
+
+    if (data.entries.length === 0) {
+      metricsHasMore.set(false);
+      return false;
+    }
+
+    metrics.update((prev) => [...prev, ...data.entries]);
+    metricsHasMore.set(data.hasMore);
+    return true;
+  } catch (error) {
+    console.error("Failed to load more metrics:", error);
+    return false;
+  } finally {
+    metricsLoading.set(false);
+  }
+}
+
+/**
+ * Clear the activity log. Optionally keep the most recent N entries.
+ */
+export async function clearMetrics(keep?: number): Promise<boolean> {
+  try {
+    const body = keep !== undefined ? JSON.stringify({ keep }) : undefined;
+    const response = await fetch("/api/metrics/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data: MetricsClearResponse = await response.json();
+
+    // Clear the frontend store
+    metrics.set([]);
+    metricsTotal.set(0);
+    metricsHasMore.set(false);
+
+    return data.deleted > 0 || keep === 0;
+  } catch (error) {
+    console.error("Failed to clear metrics:", error);
+    return false;
   }
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { metrics, getCapture } from "../stores/api";
+  import { metrics, metricsHasMore, metricsLoading, getCapture, loadMoreMetrics, clearMetrics } from "../stores/api";
   import ActivityStats from "../components/ActivityStats.svelte";
   import Tooltip from "../components/Tooltip.svelte";
   import CaptureDialog from "../components/CaptureDialog.svelte";
@@ -53,25 +53,6 @@
 
   let columnsMenuOpen = $state(false);
   let dropdownContainer: HTMLDivElement | null = null;
-
-  onMount(() => {
-    function handleKeydown(e: KeyboardEvent) {
-      if (e.key === "Escape" && columnsMenuOpen) {
-        columnsMenuOpen = false;
-      }
-    }
-    function handleClick(e: MouseEvent) {
-      if (columnsMenuOpen && dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
-        columnsMenuOpen = false;
-      }
-    }
-    document.addEventListener("keydown", handleKeydown);
-    document.addEventListener("click", handleClick);
-    return () => {
-      document.removeEventListener("keydown", handleKeydown);
-      document.removeEventListener("click", handleClick);
-    };
-  });
 
   function toggleColumn(key: ColumnKey) {
     const current = $visibleColumns;
@@ -137,6 +118,69 @@
     dialogOpen = false;
     selectedCapture = null;
   }
+
+  // Infinite scroll: load older entries when user scrolls to the bottom.
+  let sentinelEl = $state<HTMLDivElement | null>(null);
+  let observer = $state<IntersectionObserver | null>(null);
+  let isLoadingMore = $state(false);
+
+  onMount(() => {
+    function handleKeydown(e: KeyboardEvent) {
+      if (e.key === "Escape" && columnsMenuOpen) {
+        columnsMenuOpen = false;
+      }
+    }
+    function handleClick(e: MouseEvent) {
+      if (columnsMenuOpen && dropdownContainer && !dropdownContainer.contains(e.target as Node)) {
+        columnsMenuOpen = false;
+      }
+    }
+    document.addEventListener("keydown", handleKeydown);
+    document.addEventListener("click", handleClick);
+
+    // Set up intersection observer for infinite scroll.
+    observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !isLoadingMore) {
+            const hasMore = $metricsHasMore;
+            if (hasMore) {
+              isLoadingMore = true;
+              loadMoreMetrics().then((loaded) => {
+                isLoadingMore = false;
+                if (!loaded) {
+                  // No more entries to load, disconnect observer.
+                  observer?.disconnect();
+                }
+              });
+            }
+          }
+        }
+      },
+      { rootMargin: "200px" }
+    );
+
+    return () => {
+      document.removeEventListener("keydown", handleKeydown);
+      document.removeEventListener("click", handleClick);
+      observer?.disconnect();
+    };
+  });
+
+  // Re-observe sentinel when hasMore changes.
+  $effect(() => {
+    const el = sentinelEl;
+    const obs = observer;
+    if (!$metricsHasMore || !el || !obs) return;
+
+    obs.observe(el);
+    return () => obs.unobserve(el);
+  });
+
+  async function handleClear() {
+    if (!confirm("Clear all activity history?")) return;
+    await clearMetrics();
+  }
 </script>
 
 <div class="p-2">
@@ -145,7 +189,17 @@
   </div>
 
   <div class="card overflow-auto relative min-h-[30rem]">
-    <div class="flex justify-end px-4" bind:this={dropdownContainer}>
+    <div class="flex justify-between items-center px-4" bind:this={dropdownContainer}>
+      <button
+        class="btn btn--sm text-red-500 hover:text-red-400"
+        onclick={handleClear}
+        title="Clear all activity history"
+      >
+        <svg class="w-4 h-4 inline-block align-middle" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+        </svg>
+        <span class="inline-block align-middle ml-1">Clear History</span>
+      </button>
       <div class="relative">
         <button
           class="w-8 h-8 flex items-center justify-center rounded hover:bg-secondary-hover transition-colors"
@@ -290,6 +344,28 @@
               {/if}
             </tr>
           {/each}
+
+          <!-- Infinite scroll sentinel -->
+          {#if $metricsHasMore}
+            <tr>
+              <td colspan={$visibleColumns.length}>
+                <div bind:this={sentinelEl} class="py-4 text-center">
+                  {#if isLoadingMore || $metricsLoading}
+                    <div class="inline-flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                      <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                      </svg>
+                      Loading older entries...
+                    </div>
+                  {:else}
+                    <!-- invisible sentinel for intersection observer -->
+                    <div class="h-px"></div>
+                  {/if}
+                </div>
+              </td>
+            </tr>
+          {/if}
         {/if}
       </tbody>
     </table>
