@@ -191,10 +191,10 @@ func (mp *metricsMonitor) storeEntriesToActivity(entries []activitylog.Entry) []
 			ts = time.Now()
 		}
 		result[i] = ActivityLogEntry{
-			ID:            e.ID,
-			Timestamp:     ts,
-			Model:         e.Model,
-			ReqPath:       e.ReqPath,
+			ID:              e.ID,
+			Timestamp:       ts,
+			Model:           e.Model,
+			ReqPath:         e.ReqPath,
 			RespContentType: e.RespContentType,
 			RespStatusCode:  e.RespStatusCode,
 			Tokens: TokenMetrics{
