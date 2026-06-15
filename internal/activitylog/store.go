@@ -12,7 +12,7 @@ import (
 
 // Entry is the persistent representation of an activity log entry.
 type Entry struct {
-	ID              int64   `json:"id"`
+	ID              int     `json:"id"`
 	Timestamp       string  `json:"timestamp"`
 	Model           string  `json:"model"`
 	ReqPath         string  `json:"reqPath"`
@@ -24,7 +24,6 @@ type Entry struct {
 	PromptPerSecond float64 `json:"promptPerSecond"`
 	TokensPerSecond float64 `json:"tokensPerSecond"`
 	DurationMs      int     `json:"durationMs"`
-	HasCapture      bool    `json:"hasCapture"`
 }
 
 // Store provides persistent storage for activity log entries.
@@ -83,34 +82,33 @@ func (s *Store) createTable() error {
 		output_tokens     INTEGER NOT NULL DEFAULT 0,
 		prompt_per_second REAL    NOT NULL DEFAULT -1,
 		tokens_per_second REAL    NOT NULL DEFAULT -1,
-		duration_ms       INTEGER NOT NULL DEFAULT 0,
-		has_capture       INTEGER NOT NULL DEFAULT 0
+		duration_ms       INTEGER NOT NULL DEFAULT 0
 	);`
 	_, err := s.db.Exec(query)
 	return err
 }
 
 // Insert adds a single entry to the database. Returns the assigned row ID.
-func (s *Store) Insert(e *Entry) (int64, error) {
+func (s *Store) Insert(e *Entry) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result, err := s.db.Exec(`
+	var id int
+	err := s.db.QueryRow(`
 		INSERT INTO activity (
 			timestamp, model, req_path, resp_content_type, resp_status_code,
 			cached_tokens, input_tokens, output_tokens,
-			prompt_per_second, tokens_per_second, duration_ms, has_capture
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			prompt_per_second, tokens_per_second, duration_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		RETURNING id`,
 		e.Timestamp, e.Model, e.ReqPath, e.RespContentType, e.RespStatusCode,
 		e.CachedTokens, e.InputTokens, e.OutputTokens,
-		e.PromptPerSecond, e.TokensPerSecond, e.DurationMs, e.HasCapture,
-	)
+		e.PromptPerSecond, e.TokensPerSecond, e.DurationMs,
+	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert activity entry: %w", err)
 	}
-
-	id, err := result.LastInsertId()
-	return id, err
+	return id, nil
 }
 
 // Query returns paginated entries, ordered newest-first.
@@ -126,7 +124,7 @@ func (s *Store) Query(offset, limit int) ([]Entry, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp, model, req_path, resp_content_type,
 		       resp_status_code, cached_tokens, input_tokens, output_tokens,
-		       prompt_per_second, tokens_per_second, duration_ms, has_capture
+		       prompt_per_second, tokens_per_second, duration_ms
 		FROM activity
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?`, limit, offset)
@@ -138,17 +136,14 @@ func (s *Store) Query(offset, limit int) ([]Entry, error) {
 	var entries []Entry
 	for rows.Next() {
 		var e Entry
-		var hasCapture int
 		err := rows.Scan(
 			&e.ID, &e.Timestamp, &e.Model, &e.ReqPath, &e.RespContentType,
 			&e.RespStatusCode, &e.CachedTokens, &e.InputTokens, &e.OutputTokens,
-			&e.PromptPerSecond, &e.TokensPerSecond, &e.DurationMs, &hasCapture,
+			&e.PromptPerSecond, &e.TokensPerSecond, &e.DurationMs,
 		)
-		// ID is scanned as int64 (SQLite rowid), other fields as their native types.
 		if err != nil {
 			return nil, fmt.Errorf("scan activity row: %w", err)
 		}
-		e.HasCapture = hasCapture != 0
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {

@@ -188,7 +188,7 @@ func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
 
 // handleAPICapture returns the stored request/response capture for a metric ID.
 func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, "invalid capture ID")
 		return

@@ -20,7 +20,7 @@ func tempDB(t *testing.T) string {
 	return f.Name()
 }
 
-func makeEntry(id int64, model, path string) Entry {
+func makeEntry(id int, model, path string) Entry {
 	return Entry{
 		ID:              id,
 		Timestamp:       "2025-01-15T10:00:00Z",
@@ -34,7 +34,6 @@ func makeEntry(id int64, model, path string) Entry {
 		PromptPerSecond: 100.5,
 		TokensPerSecond: 200.3,
 		DurationMs:      500,
-		HasCapture:      false,
 	}
 }
 
@@ -49,6 +48,19 @@ func TestNew(t *testing.T) {
 	store, err = New(path)
 	require.NoError(t, err)
 	require.NotNil(t, store)
+
+	rows, err := store.db.Query("PRAGMA table_info(activity)")
+	require.NoError(t, err)
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, columnType string
+		var defaultValue any
+		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk))
+		assert.NotEqual(t, "has_capture", name)
+	}
+	require.NoError(t, rows.Err())
+
 	require.NoError(t, store.Close())
 }
 
@@ -62,7 +74,7 @@ func TestInsertAndQuery(t *testing.T) {
 	e := makeEntry(0, "test-model", "/v1/chat/completions")
 	id, err := store.Insert(&e)
 	require.NoError(t, err)
-	assert.Greater(t, id, int64(0))
+	assert.Greater(t, id, 0)
 
 	// Query it back
 	entries, err := store.Query(0, 10)
@@ -80,7 +92,7 @@ func TestQueryOrdering(t *testing.T) {
 
 	// Insert entries with different models
 	for i := 0; i < 5; i++ {
-		e := makeEntry(int64(i), fmt.Sprintf("model-%d", i), fmt.Sprintf("/path-%d", i))
+		e := makeEntry(i, fmt.Sprintf("model-%d", i), fmt.Sprintf("/path-%d", i))
 		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
@@ -101,7 +113,7 @@ func TestQueryPagination(t *testing.T) {
 
 	// Insert 10 entries
 	for i := 0; i < 10; i++ {
-		e := makeEntry(int64(i), fmt.Sprintf("model-%d", i), "/path")
+		e := makeEntry(i, fmt.Sprintf("model-%d", i), "/path")
 		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
@@ -149,7 +161,7 @@ func TestCount(t *testing.T) {
 	assert.Equal(t, 0, count)
 
 	for i := 0; i < 5; i++ {
-		e := makeEntry(int64(i), "model", "/path")
+		e := makeEntry(i, "model", "/path")
 		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
@@ -166,7 +178,7 @@ func TestDeleteAll(t *testing.T) {
 	defer store.Close()
 
 	for i := 0; i < 5; i++ {
-		e := makeEntry(int64(i), "model", "/path")
+		e := makeEntry(i, "model", "/path")
 		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
@@ -188,7 +200,7 @@ func TestDeleteOldest(t *testing.T) {
 
 	// Insert 10 entries
 	for i := 0; i < 10; i++ {
-		e := makeEntry(int64(i), fmt.Sprintf("model-%d", i), "/path")
+		e := makeEntry(i, fmt.Sprintf("model-%d", i), "/path")
 		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
@@ -218,7 +230,7 @@ func TestDeleteOldestKeepZero(t *testing.T) {
 	defer store.Close()
 
 	for i := 0; i < 5; i++ {
-		e := makeEntry(int64(i), "model", "/path")
+		e := makeEntry(i, "model", "/path")
 		_, err := store.Insert(&e)
 		require.NoError(t, err)
 	}
@@ -245,7 +257,7 @@ func TestConcurrentInserts(t *testing.T) {
 	for g := 0; g < numGoroutines; g++ {
 		go func(gID int) {
 			for i := 0; i < entriesPerGoroutine; i++ {
-				e := makeEntry(int64(gID*entriesPerGoroutine+i), fmt.Sprintf("model-g%d-e%d", gID, i), "/path")
+				e := makeEntry(gID*entriesPerGoroutine+i, fmt.Sprintf("model-g%d-e%d", gID, i), "/path")
 				_, err := store.Insert(&e)
 				require.NoError(t, err)
 			}

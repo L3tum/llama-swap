@@ -34,7 +34,7 @@ type TokenMetrics struct {
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs.
 type ActivityLogEntry struct {
-	ID              int64        `json:"id"`
+	ID              int          `json:"id"`
 	Timestamp       time.Time    `json:"timestamp"`
 	Model           string       `json:"model"`
 	ReqPath         string       `json:"req_path"`
@@ -66,6 +66,8 @@ type MetricsClearResponse struct {
 	Deleted int `json:"deleted"`
 }
 
+const metricsStorePruneInterval = 100
+
 // metricsMonitor parses upstream responses for token statistics, keeps a
 // bounded in-memory ring of recent activity, and (when captures are enabled)
 // stores zstd+CBOR-compressed request/response captures in a sized cache.
@@ -73,9 +75,12 @@ type MetricsClearResponse struct {
 type metricsMonitor struct {
 	mu      sync.RWMutex
 	metrics ring.Buffer[ActivityLogEntry]
-	nextID  int64
+	nextID  int
 	logger  *logmon.Monitor
 	store   *activitylog.Store // nil = no persistence
+
+	maxStoreMetrics       int
+	storeWritesSincePrune int
 
 	enableCaptures bool
 	captureCache   *cache.Cache // zstd-compressed CBOR of ReqRespCapture
@@ -84,25 +89,35 @@ type metricsMonitor struct {
 // newMetricsMonitor creates a metricsMonitor retaining up to maxMetrics entries.
 // captureBufferMB is the capture buffer size in megabytes; 0 disables captures.
 // store is the optional persistent backend; nil disables persistence.
-func newMetricsMonitor(logger *logmon.Monitor, maxMetrics int, captureBufferMB int, store *activitylog.Store) *metricsMonitor {
+// maxStoreMetrics limits persisted entries when store is configured; 0 disables pruning.
+func newMetricsMonitor(logger *logmon.Monitor, maxMetrics int, captureBufferMB int, store *activitylog.Store, maxStoreMetrics int) *metricsMonitor {
 	if maxMetrics <= 0 {
 		maxMetrics = 1000
 	}
+	if maxStoreMetrics < 0 {
+		maxStoreMetrics = 0
+	}
 	mm := &metricsMonitor{
-		logger:         logger,
-		metrics:        ring.NewBuffer[ActivityLogEntry](maxMetrics),
-		store:          store,
-		enableCaptures: captureBufferMB > 0,
+		logger:          logger,
+		metrics:         ring.NewBuffer[ActivityLogEntry](maxMetrics),
+		store:           store,
+		maxStoreMetrics: maxStoreMetrics,
+		enableCaptures:  captureBufferMB > 0,
 	}
 	if captureBufferMB > 0 {
 		mm.captureCache = cache.New(captureBufferMB * 1024 * 1024)
+	}
+	if store != nil && maxStoreMetrics > 0 {
+		if _, err := store.DeleteOldest(maxStoreMetrics); err != nil {
+			logger.Warnf("metrics store initial prune failed: %v", err)
+		}
 	}
 	return mm
 }
 
 // queueMetrics adds a metric to the ring and optionally the persistent store.
 // Returns the assigned ID.
-func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int64 {
+func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 
@@ -122,16 +137,41 @@ func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int64 {
 			PromptPerSecond: metric.Tokens.PromptPerSecond,
 			TokensPerSecond: metric.Tokens.TokensPerSecond,
 			DurationMs:      metric.DurationMs,
-			HasCapture:      metric.HasCapture,
 		}
 		if dbID, err := mp.store.Insert(&ae); err == nil {
 			id = dbID
+			mp.pruneStoreIfNeeded()
 		}
 	}
 
 	metric.ID = id
 	mp.metrics.Push(metric)
 	return metric.ID
+}
+
+func (mp *metricsMonitor) pruneStoreIfNeeded() {
+	if mp.store == nil || mp.maxStoreMetrics <= 0 {
+		return
+	}
+
+	mp.storeWritesSincePrune++
+	pruneInterval := metricsStorePruneInterval
+	if mp.maxStoreMetrics < pruneInterval {
+		pruneInterval = mp.maxStoreMetrics
+	}
+	if mp.storeWritesSincePrune < pruneInterval {
+		return
+	}
+	mp.storeWritesSincePrune = 0
+
+	deleted, err := mp.store.DeleteOldest(mp.maxStoreMetrics)
+	if err != nil {
+		mp.logger.Warnf("metrics store prune failed: %v", err)
+		return
+	}
+	if deleted > 0 {
+		mp.retainCaptureCacheAfterClear(mp.maxStoreMetrics)
+	}
 }
 
 // emitMetric publishes an ActivityLogEvent for the given metric.
@@ -165,7 +205,7 @@ func (mp *metricsMonitor) getMetricsPaginated(offset, limit int) []ActivityLogEn
 	// Mark has_capture for entries that have a capture in the in-memory cache.
 	if mp.captureCache != nil {
 		for i := range result {
-			result[i].HasCapture = result[i].HasCapture || mp.captureCache.Has(int(result[i].ID))
+			result[i].HasCapture = result[i].HasCapture || mp.captureCache.Has(result[i].ID)
 		}
 	}
 
@@ -205,7 +245,6 @@ func (mp *metricsMonitor) storeEntriesToActivity(entries []activitylog.Entry) []
 				TokensPerSecond: e.TokensPerSecond,
 			},
 			DurationMs: e.DurationMs,
-			HasCapture: e.HasCapture,
 		}
 	}
 	return result
@@ -275,7 +314,7 @@ func (mp *metricsMonitor) getMetricsPaginatedAndCount(offset, limit int) (entrie
 	// Mark has_capture for entries that have a capture in the in-memory cache.
 	if mp.captureCache != nil {
 		for i := range entries {
-			entries[i].HasCapture = entries[i].HasCapture || mp.captureCache.Has(int(entries[i].ID))
+			entries[i].HasCapture = entries[i].HasCapture || mp.captureCache.Has(entries[i].ID)
 		}
 	}
 
@@ -341,7 +380,7 @@ func (mp *metricsMonitor) retainCaptureCacheAfterClear(keep int) {
 
 	ids := make(map[int]struct{}, len(entries))
 	for _, entry := range entries {
-		ids[int(entry.ID)] = struct{}{}
+		ids[entry.ID] = struct{}{}
 	}
 	mp.captureCache.Retain(ids)
 }

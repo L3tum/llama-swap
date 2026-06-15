@@ -914,6 +914,43 @@ models:
 	})
 }
 
+func TestConfig_MetricsMaxInDB(t *testing.T) {
+	t.Run("defaults to 0", func(t *testing.T) {
+		content := `
+models:
+  model1:
+    cmd: server --port ${PORT}
+`
+		config, err := LoadConfigFromReader(strings.NewReader(content))
+		assert.NoError(t, err)
+		assert.Equal(t, 0, config.MetricsMaxInDB)
+	})
+
+	t.Run("configured value", func(t *testing.T) {
+		content := `
+metricsMaxInDB: 5000
+models:
+  model1:
+    cmd: server --port ${PORT}
+`
+		config, err := LoadConfigFromReader(strings.NewReader(content))
+		assert.NoError(t, err)
+		assert.Equal(t, 5000, config.MetricsMaxInDB)
+	})
+
+	t.Run("negative value rejected", func(t *testing.T) {
+		content := `
+metricsMaxInDB: -1
+models:
+  model1:
+    cmd: server --port ${PORT}
+`
+		_, err := LoadConfigFromReader(strings.NewReader(content))
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "metricsMaxInDB must be >= 0")
+	})
+}
+
 func TestConfig_EnvMacros(t *testing.T) {
 	t.Run("basic env substitution in cmd", func(t *testing.T) {
 		t.Setenv("TEST_MODEL_PATH", "/opt/models")

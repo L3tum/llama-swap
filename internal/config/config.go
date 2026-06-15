@@ -124,7 +124,8 @@ type Config struct {
 	LogTimeFormat      string                 `yaml:"logTimeFormat"`
 	LogToStdout        string                 `yaml:"logToStdout"`
 	MetricsMaxInMemory int                    `yaml:"metricsMaxInMemory"`
-	MetricsDBPath      string                 `yaml:"metricsDBPath"` // SQLite DB path; empty = no persistence
+	MetricsDBPath      string                 `yaml:"metricsDBPath"`  // SQLite DB path; empty = no persistence
+	MetricsMaxInDB     int                    `yaml:"metricsMaxInDB"` // 0 = unlimited
 	CaptureBuffer      int                    `yaml:"captureBuffer"`
 	Performance        PerformanceConfig      `yaml:"performance"`
 	GlobalTTL          int                    `yaml:"globalTTL"`
@@ -269,6 +270,10 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 
 	if config.GlobalTTL < 0 {
 		return Config{}, fmt.Errorf("globalTTL must be >= 0")
+	}
+
+	if config.MetricsMaxInDB < 0 {
+		return Config{}, fmt.Errorf("metricsMaxInDB must be >= 0")
 	}
 
 	switch config.LogToStdout {
