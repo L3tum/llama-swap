@@ -34,7 +34,7 @@ type TokenMetrics struct {
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs.
 type ActivityLogEntry struct {
-	ID              int          `json:"id"`
+	ID              int64        `json:"id"`
 	Timestamp       time.Time    `json:"timestamp"`
 	Model           string       `json:"model"`
 	ReqPath         string       `json:"req_path"`
@@ -73,7 +73,7 @@ type MetricsClearResponse struct {
 type metricsMonitor struct {
 	mu      sync.RWMutex
 	metrics ring.Buffer[ActivityLogEntry]
-	nextID  int
+	nextID  int64
 	logger  *logmon.Monitor
 	store   *activitylog.Store // nil = no persistence
 
@@ -102,7 +102,7 @@ func newMetricsMonitor(logger *logmon.Monitor, maxMetrics int, captureBufferMB i
 
 // queueMetrics adds a metric to the ring and optionally the persistent store.
 // Returns the assigned ID.
-func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int {
+func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int64 {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 
@@ -125,7 +125,7 @@ func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int {
 			HasCapture:      metric.HasCapture,
 		}
 		if dbID, err := mp.store.Insert(&ae); err == nil {
-			id = int(dbID)
+			id = dbID
 		}
 	}
 
@@ -165,7 +165,7 @@ func (mp *metricsMonitor) getMetricsPaginated(offset, limit int) []ActivityLogEn
 	// Mark has_capture for entries that have a capture in the in-memory cache.
 	if mp.captureCache != nil {
 		for i := range result {
-			result[i].HasCapture = result[i].HasCapture || mp.captureCache.Has(result[i].ID)
+			result[i].HasCapture = result[i].HasCapture || mp.captureCache.Has(int(result[i].ID))
 		}
 	}
 
@@ -242,6 +242,12 @@ func (mp *metricsMonitor) getMetricsPaginatedJSON(offset, limit int) ([]byte, er
 	return json.Marshal(resp)
 }
 
+// getSnapshotJSON returns the first page of metrics as a paginated JSON response.
+// Used for SSE notifications after a clear so subscribers see the updated state.
+func (mp *metricsMonitor) getSnapshotJSON() ([]byte, error) {
+	return mp.getMetricsPaginatedJSON(0, metricsPageSize)
+}
+
 // getMetricsPaginatedAndCount returns paginated entries and the total count
 // under a single lock, avoiding a race between the two operations.
 func (mp *metricsMonitor) getMetricsPaginatedAndCount(offset, limit int) (entries []ActivityLogEntry, total int) {
@@ -269,7 +275,7 @@ func (mp *metricsMonitor) getMetricsPaginatedAndCount(offset, limit int) (entrie
 	// Mark has_capture for entries that have a capture in the in-memory cache.
 	if mp.captureCache != nil {
 		for i := range entries {
-			entries[i].HasCapture = entries[i].HasCapture || mp.captureCache.Has(entries[i].ID)
+			entries[i].HasCapture = entries[i].HasCapture || mp.captureCache.Has(int(entries[i].ID))
 		}
 	}
 
@@ -308,8 +314,9 @@ func (mp *metricsMonitor) clearMetrics(keep int) int {
 	}
 
 	// No persistent store — clear only the in-memory ring buffer.
+	cleared := mp.metrics.Len()
 	mp.metrics = ring.NewBuffer[ActivityLogEntry](mp.metrics.Cap())
-	return mp.metrics.Len()
+	return cleared
 }
 
 // Close releases resources held by the metrics monitor.

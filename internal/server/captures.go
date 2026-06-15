@@ -12,7 +12,7 @@ import (
 
 // ReqRespCapture is a stored request/response pair for a single metered request.
 type ReqRespCapture struct {
-	ID          int               `json:"id"`
+	ID          int64             `json:"id"`
 	ReqPath     string            `json:"req_path"`
 	ReqHeaders  map[string]string `json:"req_headers"`
 	ReqBody     []byte            `json:"req_body"`
@@ -118,7 +118,7 @@ func (mp *metricsMonitor) addCapture(capture ReqRespCapture) bool {
 		return false
 	}
 
-	if err := mp.captureCache.Add(capture.ID, compressed); err != nil {
+	if err := mp.captureCache.Add(int(capture.ID), compressed); err != nil {
 		mp.logger.Warnf("capture %d too large (%d bytes), skipping: %v", capture.ID, len(compressed), err)
 		return false
 	}
@@ -130,11 +130,11 @@ func (mp *metricsMonitor) addCapture(capture ReqRespCapture) bool {
 
 // getCaptureByID decompresses and unmarshals a capture by ID. Returns nil if
 // the capture is not found or decompression fails.
-func (mp *metricsMonitor) getCaptureByID(id int) *ReqRespCapture {
+func (mp *metricsMonitor) getCaptureByID(id int64) *ReqRespCapture {
 	if mp.captureCache == nil {
 		return nil
 	}
-	data, err := mp.captureCache.Get(id)
+	data, err := mp.captureCache.Get(int(id))
 	if err != nil {
 		return nil
 	}

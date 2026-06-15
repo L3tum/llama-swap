@@ -5,6 +5,7 @@ const ConfigFileChangedEventID = 0x03
 const ActivityLogEventID = 0x05
 const ModelPreloadedEventID = 0x06
 const InFlightRequestsEventID = 0x07
+const MetricsSnapshotEventID = 0x08
 
 // ProcessStateChangeEvent is emitted whenever a process transitions between
 // lifecycle states. States are carried as strings so this package stays a leaf
@@ -49,4 +50,14 @@ type InFlightRequestsEvent struct {
 
 func (e InFlightRequestsEvent) Type() uint32 {
 	return InFlightRequestsEventID
+}
+
+// MetricsSnapshotEvent carries a paginated metrics snapshot for SSE broadcast.
+// Emitted after a metrics clear so subscribers see the updated state immediately.
+type MetricsSnapshotEvent struct {
+	SnapshotJSON []byte
+}
+
+func (e MetricsSnapshotEvent) Type() uint32 {
+	return MetricsSnapshotEventID
 }

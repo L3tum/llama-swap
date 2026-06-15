@@ -16,6 +16,9 @@ import (
 // apiUnloadTimeout is used by the API endpoints to stop processes
 const apiUnloadTimeout = 10 * time.Second
 
+// metricsPageSize is the default page size for paginated metrics endpoints.
+const metricsPageSize = 50
+
 // modelRecord is one entry in the OpenAI-compatible /v1/models listing.
 type modelRecord struct {
 	ID          string         `json:"id"`

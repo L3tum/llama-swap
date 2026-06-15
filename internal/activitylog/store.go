@@ -12,7 +12,7 @@ import (
 
 // Entry is the persistent representation of an activity log entry.
 type Entry struct {
-	ID              int     `json:"id"`
+	ID              int64   `json:"id"`
 	Timestamp       string  `json:"timestamp"`
 	Model           string  `json:"model"`
 	ReqPath         string  `json:"reqPath"`
@@ -52,6 +52,12 @@ func New(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("set WAL mode: %w", err)
 	}
 
+	// Set WAL auto-checkpoint to 1000 frames to prevent unbounded WAL growth.
+	if _, err := db.Exec("PRAGMA wal_autocheckpoint=1000"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set WAL autocheckpoint: %w", err)
+	}
+
 	s := &Store{db: db, path: dbPath}
 
 	if err := s.createTable(); err != nil {
@@ -79,8 +85,7 @@ func (s *Store) createTable() error {
 		tokens_per_second REAL    NOT NULL DEFAULT -1,
 		duration_ms       INTEGER NOT NULL DEFAULT 0,
 		has_capture       INTEGER NOT NULL DEFAULT 0
-	);
-	CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity(timestamp DESC);`
+	);`
 	_, err := s.db.Exec(query)
 	return err
 }
@@ -139,6 +144,7 @@ func (s *Store) Query(offset, limit int) ([]Entry, error) {
 			&e.RespStatusCode, &e.CachedTokens, &e.InputTokens, &e.OutputTokens,
 			&e.PromptPerSecond, &e.TokensPerSecond, &e.DurationMs, &hasCapture,
 		)
+		// ID is scanned as int64 (SQLite rowid), other fields as their native types.
 		if err != nil {
 			return nil, fmt.Errorf("scan activity row: %w", err)
 		}

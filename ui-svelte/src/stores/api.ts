@@ -24,6 +24,9 @@ export const metrics = writable<ActivityLogEntry[]>([]);
 export const metricsTotal = writable<number>(0);
 export const metricsHasMore = writable<boolean>(false);
 export const metricsLoading = writable<boolean>(false);
+// Persistent subscription to read current metrics value without subscribe() anti-pattern.
+let currentMetricsValue: ActivityLogEntry[] = [];
+metrics.subscribe((v) => { currentMetricsValue = v; });
 export const inFlightRequests = writable<number>(0);
 export const versionInfo = writable<VersionInfo>({
   build_date: "unknown",
@@ -249,9 +252,7 @@ export async function loadMoreMetrics(): Promise<boolean> {
   metricsLoading.set(true);
   try {
     // Determine current offset from the metrics store length.
-    let currentMetrics: ActivityLogEntry[];
-    metrics.subscribe((v) => { currentMetrics = v; })();
-    const offset = currentMetrics.length;
+    const offset = currentMetricsValue.length;
 
     const response = await fetch(`/api/metrics?offset=${offset}&limit=${METRICS_PAGE_SIZE}`);
     if (!response.ok) {

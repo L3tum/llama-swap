@@ -126,6 +126,12 @@ func (s *Server) handleAPIMetricsClear(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deleted := s.metrics.clearMetrics(req.Keep)
+
+	// Notify SSE subscribers of the updated metrics state.
+	if snap, err := s.metrics.getSnapshotJSON(); err == nil {
+		event.Emit(shared.MetricsSnapshotEvent{SnapshotJSON: snap})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(MetricsClearResponse{Deleted: deleted})
 }
@@ -182,7 +188,7 @@ func (s *Server) handleAPIVersion(w http.ResponseWriter, r *http.Request) {
 
 // handleAPICapture returns the stored request/response capture for a metric ID.
 func (s *Server) handleAPICapture(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.Atoi(r.PathValue("id"))
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		router.SendResponse(w, r, http.StatusBadRequest, "invalid capture ID")
 		return
@@ -264,8 +270,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sendMetricsSnapshot := func() {
-		entries := s.metrics.getMetricsPaginated(0, 50)
-		total := s.metrics.getMetricsCount()
+		entries, total := s.metrics.getMetricsPaginatedAndCount(0, metricsPageSize)
 		resp := MetricsResponse{
 			Entries: entries,
 			Total:   total,
@@ -287,6 +292,9 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
 	defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
 	defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
+	defer event.On(func(e shared.MetricsSnapshotEvent) {
+		send(messageEnvelope{Type: msgTypeMetrics, Data: string(e.SnapshotJSON)})
+	})()
 
 	// initial payload
 	sendLogData("proxy", s.proxylog.GetHistory())
