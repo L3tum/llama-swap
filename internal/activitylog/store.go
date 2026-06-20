@@ -23,6 +23,7 @@ type Entry struct {
 	OutputTokens    int     `json:"outputTokens"`
 	PromptPerSecond float64 `json:"promptPerSecond"`
 	TokensPerSecond float64 `json:"tokensPerSecond"`
+	SpeedApprox     bool    `json:"speedApprox"`
 	DurationMs      int     `json:"durationMs"`
 }
 
@@ -82,6 +83,7 @@ func (s *Store) createTable() error {
 		output_tokens     INTEGER NOT NULL DEFAULT 0,
 		prompt_per_second REAL    NOT NULL DEFAULT -1,
 		tokens_per_second REAL    NOT NULL DEFAULT -1,
+		speed_approx      INTEGER NOT NULL DEFAULT 0,
 		duration_ms       INTEGER NOT NULL DEFAULT 0
 	);`
 	_, err := s.db.Exec(query)
@@ -98,12 +100,12 @@ func (s *Store) Insert(e *Entry) (int, error) {
 		INSERT INTO activity (
 			timestamp, model, req_path, resp_content_type, resp_status_code,
 			cached_tokens, input_tokens, output_tokens,
-			prompt_per_second, tokens_per_second, duration_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			prompt_per_second, tokens_per_second, speed_approx, duration_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id`,
 		e.Timestamp, e.Model, e.ReqPath, e.RespContentType, e.RespStatusCode,
 		e.CachedTokens, e.InputTokens, e.OutputTokens,
-		e.PromptPerSecond, e.TokensPerSecond, e.DurationMs,
+		e.PromptPerSecond, e.TokensPerSecond, boolToInt(e.SpeedApprox), e.DurationMs,
 	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("insert activity entry: %w", err)
@@ -124,7 +126,7 @@ func (s *Store) Query(offset, limit int) ([]Entry, error) {
 	rows, err := s.db.Query(`
 		SELECT id, timestamp, model, req_path, resp_content_type,
 		       resp_status_code, cached_tokens, input_tokens, output_tokens,
-		       prompt_per_second, tokens_per_second, duration_ms
+		       prompt_per_second, tokens_per_second, speed_approx, duration_ms
 		FROM activity
 		ORDER BY id DESC
 		LIMIT ? OFFSET ?`, limit, offset)
@@ -136,11 +138,13 @@ func (s *Store) Query(offset, limit int) ([]Entry, error) {
 	var entries []Entry
 	for rows.Next() {
 		var e Entry
+		var speedApprox int
 		err := rows.Scan(
 			&e.ID, &e.Timestamp, &e.Model, &e.ReqPath, &e.RespContentType,
 			&e.RespStatusCode, &e.CachedTokens, &e.InputTokens, &e.OutputTokens,
-			&e.PromptPerSecond, &e.TokensPerSecond, &e.DurationMs,
+			&e.PromptPerSecond, &e.TokensPerSecond, &speedApprox, &e.DurationMs,
 		)
+		e.SpeedApprox = speedApprox != 0
 		if err != nil {
 			return nil, fmt.Errorf("scan activity row: %w", err)
 		}
@@ -221,4 +225,12 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// boolToInt converts a bool to 1 or 0 for SQLite storage.
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
