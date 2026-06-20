@@ -30,6 +30,7 @@ type TokenMetrics struct {
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
+	SpeedApprox     bool    `json:"speed_approx"`
 }
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs.
@@ -605,11 +606,13 @@ func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) 
 
 // buildMetrics composes an ActivityLogEntry from accumulated token counts and
 // optional llama-server timings (which override input/output and provide rates).
+// When timings are absent, speed is approximated from wall-clock duration.
 func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, cachedTokens int64, timings gjson.Result) ActivityLogEntry {
 	wallDurationMs := int(time.Since(start).Milliseconds())
 	durationMs := wallDurationMs
 	tokensPerSecond := -1.0
 	promptPerSecond := -1.0
+	speedApprox := false
 
 	if timings.Exists() {
 		inputTokens = timings.Get("prompt_n").Int()
@@ -623,6 +626,15 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 		if cachedValue := timings.Get("cache_n"); cachedValue.Exists() {
 			cachedTokens = cachedValue.Int()
 		}
+	} else {
+		// Fallback: approximate speed from wall-clock duration.
+		// This includes network overhead but provides useful data for backends
+		// like vLLM that don't expose timing in API responses.
+		if wallDurationMs > 0 {
+			promptPerSecond = float64(inputTokens) / float64(wallDurationMs) * 1000.0
+			tokensPerSecond = float64(outputTokens) / float64(wallDurationMs) * 1000.0
+			speedApprox = true
+		}
 	}
 
 	return ActivityLogEntry{
@@ -634,6 +646,7 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 			OutputTokens:    int(outputTokens),
 			PromptPerSecond: promptPerSecond,
 			TokensPerSecond: tokensPerSecond,
+			SpeedApprox:     speedApprox,
 		},
 		DurationMs: durationMs,
 	}
