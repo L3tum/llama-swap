@@ -71,6 +71,15 @@ View detailed token metrics:
 
 <img width="1111" height="515" alt="image" src="https://github.com/user-attachments/assets/64bfb280-d7a3-4126-971a-a128fd40410c" />
 
+> [!TIP]
+> **Approximate speeds** — If your upstream server (e.g. vLLM, TabbyAPI) doesn't include
+> per-token timing data in its API response, llama-swap will calculate speeds from the
+> wall-clock duration instead. These values are marked with "(Approx)" in the Activity tab.
+> Approximate speeds include network and proxy overhead, so they'll be slightly lower than
+> server-side timings. For localhost setups, expect a 5–15% difference; remote backends
+> may show larger gaps depending on latency. The values are still useful for comparing
+> models or tracking performance trends over time.
+
 Inspect request and responses:
 
 <img width="1111" height="720" alt="image" src="https://github.com/user-attachments/assets/24fe4aca-1448-4d7c-b9e8-a967589bda6c" />
