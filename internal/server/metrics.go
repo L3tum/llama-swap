@@ -137,6 +137,7 @@ func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) int {
 			OutputTokens:    metric.Tokens.OutputTokens,
 			PromptPerSecond: metric.Tokens.PromptPerSecond,
 			TokensPerSecond: metric.Tokens.TokensPerSecond,
+			SpeedApprox:     metric.Tokens.SpeedApprox,
 			DurationMs:      metric.DurationMs,
 		}
 		if dbID, err := mp.store.Insert(&ae); err == nil {
@@ -244,6 +245,7 @@ func (mp *metricsMonitor) storeEntriesToActivity(entries []activitylog.Entry) []
 				OutputTokens:    e.OutputTokens,
 				PromptPerSecond: e.PromptPerSecond,
 				TokensPerSecond: e.TokensPerSecond,
+				SpeedApprox:     e.SpeedApprox,
 			},
 			DurationMs: e.DurationMs,
 		}
