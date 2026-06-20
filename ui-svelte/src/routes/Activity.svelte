@@ -65,8 +65,9 @@
     }
   }
 
-  function formatSpeed(speed: number): string {
-    return speed < 0 ? "unknown" : speed.toFixed(2) + " t/s";
+  function formatSpeed(speed: number, approximate?: boolean): string {
+    const suffix = approximate ? " (Approx)" : "";
+    return speed < 0 ? "unknown" : speed.toFixed(2) + " t/s" + suffix;
   }
 
   function formatDuration(ms: number): string {
@@ -319,10 +320,10 @@
                 <td class="px-6 py-4">{metric.tokens.output_tokens.toLocaleString()}</td>
               {/if}
               {#if $visibleColumns.includes("prompt_speed")}
-                <td class="px-6 py-4">{formatSpeed(metric.tokens.prompt_per_second)}</td>
+                <td class="px-6 py-4">{formatSpeed(metric.tokens.prompt_per_second, metric.tokens.speed_approx)}</td>
               {/if}
               {#if $visibleColumns.includes("gen_speed")}
-                <td class="px-6 py-4">{formatSpeed(metric.tokens.tokens_per_second)}</td>
+                <td class="px-6 py-4">{formatSpeed(metric.tokens.tokens_per_second, metric.tokens.speed_approx)}</td>
               {/if}
               {#if $visibleColumns.includes("duration")}
                 <td class="px-6 py-4">{formatDuration(metric.duration_ms)}</td>

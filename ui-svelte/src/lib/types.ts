@@ -18,6 +18,7 @@ export interface TokenMetrics {
   output_tokens: number;
   prompt_per_second: number;
   tokens_per_second: number;
+  speed_approx: boolean;
 }
 
 export interface ActivityLogEntry {
