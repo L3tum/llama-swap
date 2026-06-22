@@ -23,6 +23,13 @@ func (m *Monitor) MetricsHandler() http.HandlerFunc {
 		if len(gpuStats) > 0 {
 			writeGpuMetrics(w, latestPerGPU(gpuStats))
 		}
+
+		// ponytail: process metrics are exposed only if monitoring is enabled.
+		// Could gate on m.conf.MonitorProcesses, but CurrentProcesses() handles it.
+		procStats := m.CurrentProcesses()
+		if len(procStats) > 0 {
+			writeGpuProcMetrics(w, latestPerProcess(procStats))
+		}
 	}
 }
 
@@ -107,6 +114,27 @@ func writeGpuMetrics(w http.ResponseWriter, gpus []GpuStat) {
 	}
 }
 
+// writeGpuProcMetrics exposes per-process GPU memory metrics.
+// Only the latest snapshot per PID is emitted to avoid stale metrics.
+// ponytail: pid label is dynamic (processes spawn/die), but Prometheus handles
+// this gracefully - stale gauges are dropped on next scrape.
+func writeGpuProcMetrics(w http.ResponseWriter, procs []GpuProcStat) {
+	if len(procs) == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "# HELP llamaswap_gpu_process_memory_bytes GPU memory used by process in bytes\n")
+	fmt.Fprintf(w, "# TYPE llamaswap_gpu_process_memory_bytes gauge\n")
+	for _, p := range procs {
+		labels := fmt.Sprintf("pid=\"%d\",gpu_id=\"%d\"", p.PID, p.GPUIndex)
+		if p.GPUUUID != "" {
+			labels += fmt.Sprintf(",gpu_uuid=\"%s\"", sanitizeLabel(p.GPUUUID))
+		}
+		fmt.Fprintf(w, "llamaswap_gpu_process_memory_bytes{%s} %d\n",
+			labels, int64(p.MemUsedMB)*mbToBytes)
+	}
+}
+
 // latestPerGPU returns the most recent GpuStat for each GPU ID, sorted by ID.
 func latestPerGPU(stats []GpuStat) []GpuStat {
 	latest := make(map[int]GpuStat)
@@ -120,6 +148,24 @@ func latestPerGPU(stats []GpuStat) []GpuStat {
 		result = append(result, g)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+// latestPerProcess returns the most recent GpuProcStat for each PID.
+// ponytail: could deduplicate by PID+GPU, but a process typically uses one GPU.
+// Add composite key if multi-GPU per process becomes a thing.
+func latestPerProcess(stats []GpuProcStat) []GpuProcStat {
+	latest := make(map[int]GpuProcStat)
+	for _, p := range stats {
+		if prev, ok := latest[p.PID]; !ok || p.Timestamp.After(prev.Timestamp) {
+			latest[p.PID] = p
+		}
+	}
+	result := make([]GpuProcStat, 0, len(latest))
+	for _, p := range latest {
+		result = append(result, p)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].PID < result[j].PID })
 	return result
 }
 

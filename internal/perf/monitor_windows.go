@@ -112,3 +112,8 @@ func readSysStats() (SysStat, error) {
 		NetIO:          netIO,
 	}, nil
 }
+
+// getGpuProcStats is not supported on Windows.
+func getGpuProcStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuProcStat, error) {
+	return nil, ErrNoGpuTool
+}

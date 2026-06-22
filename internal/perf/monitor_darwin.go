@@ -206,3 +206,8 @@ func readSysStats() (SysStat, error) {
 		LoadAvg15:      loadAvg15,
 	}, nil
 }
+
+// getGpuProcStats is not supported on Darwin.
+func getGpuProcStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuProcStat, error) {
+	return nil, ErrNoGpuTool
+}

@@ -7,8 +7,9 @@ import (
 
 // PerformanceConfig holds configuration for system performance monitoring
 type PerformanceConfig struct {
-	Disabled bool          `yaml:"disabled"`
-	Every    time.Duration `yaml:"every"`
+	Disabled         bool          `yaml:"disabled"`
+	Every            time.Duration `yaml:"every"`
+	MonitorProcesses bool          `yaml:"monitor_processes"`
 }
 
 func (p *PerformanceConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

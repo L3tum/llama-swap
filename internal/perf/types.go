@@ -18,6 +18,18 @@ type GpuStat struct {
 	PowerDrawW  float64 `json:"power_draw_w"`
 }
 
+// GpuProcStat represents per-process GPU memory usage from nvidia-smi.
+// Collected via --query-compute-apps which reports only CUDA compute contexts.
+type GpuProcStat struct {
+	Timestamp time.Time `json:"timestamp"`
+
+	PID        int    `json:"pid"`
+	GPUIndex   int    `json:"gpu_index"`
+	GPUUUID    string `json:"gpu_uuid"`
+	MemUsedMB  int    `json:"mem_used_mb"`
+	ProcessName string `json:"process_name"`
+}
+
 type NetIOStat struct {
 	Name      string `json:"name"`
 	BytesRecv uint64 `json:"bytes_recv"`

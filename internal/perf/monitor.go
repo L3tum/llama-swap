@@ -22,12 +22,16 @@ type Monitor struct {
 	conf    config.PerformanceConfig
 	sysRing ring.Buffer[SysStat]
 	gpuRing ring.Buffer[[]GpuStat]
+	// ponytail: gpuProcRing is flat []GpuProcStat (all GPUs per snapshot).
+	// Per-GPU grouping would need a wrapper struct; not worth it until needed.
+	gpuProcRing ring.Buffer[[]GpuProcStat]
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 
-	sysListeners map[chan SysStat]struct{}
-	gpuListeners map[chan []GpuStat]struct{}
+	sysListeners  map[chan SysStat]struct{}
+	gpuListeners  map[chan []GpuStat]struct{}
+	gpuProcListeners map[chan []GpuProcStat]struct{}
 }
 
 func ringCapacity(c config.PerformanceConfig) int {
@@ -50,12 +54,14 @@ func New(c config.PerformanceConfig, logger *logmon.Monitor) (*Monitor, error) {
 
 	capacity := ringCapacity(c)
 	return &Monitor{
-		conf:         c,
-		log:          logger,
-		sysRing:      ring.NewBuffer[SysStat](capacity),
-		gpuRing:      ring.NewBuffer[[]GpuStat](capacity),
-		sysListeners: make(map[chan SysStat]struct{}),
-		gpuListeners: make(map[chan []GpuStat]struct{}),
+		conf:           c,
+		log:            logger,
+		sysRing:        ring.NewBuffer[SysStat](capacity),
+		gpuRing:        ring.NewBuffer[[]GpuStat](capacity),
+		gpuProcRing:    ring.NewBuffer[[]GpuProcStat](capacity),
+		sysListeners:   make(map[chan SysStat]struct{}),
+		gpuListeners:   make(map[chan []GpuStat]struct{}),
+		gpuProcListeners: make(map[chan []GpuProcStat]struct{}),
 	}, nil
 }
 
@@ -85,6 +91,7 @@ func (m *Monitor) UpdateConfig(newConf config.PerformanceConfig) {
 	capacity := ringCapacity(newConf)
 	m.sysRing = ring.NewBuffer[SysStat](capacity)
 	m.gpuRing = ring.NewBuffer[[]GpuStat](capacity)
+	m.gpuProcRing = ring.NewBuffer[[]GpuProcStat](capacity)
 	m.mutex.Unlock()
 	if !newConf.Disabled {
 		m.Start()
@@ -109,6 +116,22 @@ func (m *Monitor) Subscribe() (chan SysStat, chan []GpuStat, func()) {
 	}
 
 	return sysChan, gpuChan, unsub
+}
+
+// SubscribeProcesses returns a channel to listen to per-process GPU stats.
+func (m *Monitor) SubscribeProcesses() (chan []GpuProcStat, func()) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	ch := make(chan []GpuProcStat, 1)
+	m.gpuProcListeners[ch] = struct{}{}
+
+	unsub := func() {
+		m.mutex.Lock()
+		defer m.mutex.Unlock()
+		delete(m.gpuProcListeners, ch)
+	}
+
+	return ch, unsub
 }
 
 func (m *Monitor) Start() {
@@ -180,6 +203,44 @@ func (m *Monitor) Start() {
 			}
 		}
 	}()
+
+	// ponytail: process monitoring is a separate goroutine, gated by config.
+	// Could merge with GPU stats goroutine, but adds complexity for no benefit.
+	go func() {
+		if !m.conf.MonitorProcesses {
+			return
+		}
+		procCh, err := getGpuProcStats(m.stopCtx, m.conf.Every, m.log)
+		if err != nil {
+			if errors.Is(err, ErrNotImplemented) || errors.Is(err, ErrNoGpuTool) {
+				m.log.Infof("GPU process monitoring not available: %s", err.Error())
+			} else {
+				m.log.Errorf("failed to initialize GPU process monitoring: %s", err.Error())
+			}
+			return
+		}
+
+		for {
+			select {
+			case <-m.stopCtx.Done():
+				return
+			case p, ok := <-procCh:
+				if !ok {
+					m.log.Errorf("failed reading from procCh - stopping read goroutine")
+					return
+				}
+				m.mutex.Lock()
+				m.gpuProcRing.Push(p)
+				for l := range m.gpuProcListeners {
+					select {
+					case l <- p:
+					default:
+					}
+				}
+				m.mutex.Unlock()
+			}
+		}
+	}()
 }
 
 // Current returns a copy of the current log of system and GPU stats.
@@ -195,6 +256,19 @@ func (m *Monitor) Current() ([]SysStat, []GpuStat) {
 		gpuStats = append(gpuStats, snapshot...)
 	}
 	return sysStats, gpuStats
+}
+
+// CurrentProcesses returns a copy of the current log of per-process GPU stats.
+func (m *Monitor) CurrentProcesses() []GpuProcStat {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	snapshots := m.gpuProcRing.Slice()
+	var procs []GpuProcStat
+	for _, snapshot := range snapshots {
+		procs = append(procs, snapshot...)
+	}
+	return procs
 }
 
 func ReadSysStats() (SysStat, error) {
