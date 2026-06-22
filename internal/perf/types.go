@@ -20,13 +20,12 @@ type GpuStat struct {
 
 // GpuProcStat represents per-process GPU memory usage from nvidia-smi.
 // Collected via --query-compute-apps which reports only CUDA compute contexts.
+// Memory is aggregated across all GPUs for each PID.
 type GpuProcStat struct {
-	Timestamp time.Time `json:"timestamp"`
+	Timestamp   time.Time `json:"timestamp"`
 
-	PID        int    `json:"pid"`
-	GPUIndex   int    `json:"gpu_index"`
-	GPUUUID    string `json:"gpu_uuid"`
-	MemUsedMB  int    `json:"mem_used_mb"`
+	PID         int    `json:"pid"`
+	MemUsedMB   int    `json:"mem_used_mb"` // total across all GPUs
 	ProcessName string `json:"process_name"`
 }
 

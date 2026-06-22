@@ -115,9 +115,7 @@ func writeGpuMetrics(w http.ResponseWriter, gpus []GpuStat) {
 }
 
 // writeGpuProcMetrics exposes per-process GPU memory metrics.
-// Only the latest snapshot per PID is emitted to avoid stale metrics.
-// ponytail: pid label is dynamic (processes spawn/die), but Prometheus handles
-// this gracefully - stale gauges are dropped on next scrape.
+// Each PID appears once with total memory across all GPUs.
 func writeGpuProcMetrics(w http.ResponseWriter, procs []GpuProcStat) {
 	if len(procs) == 0 {
 		return
@@ -126,12 +124,8 @@ func writeGpuProcMetrics(w http.ResponseWriter, procs []GpuProcStat) {
 	fmt.Fprintf(w, "# HELP llamaswap_gpu_process_memory_bytes GPU memory used by process in bytes\n")
 	fmt.Fprintf(w, "# TYPE llamaswap_gpu_process_memory_bytes gauge\n")
 	for _, p := range procs {
-		labels := fmt.Sprintf("pid=\"%d\",gpu_id=\"%d\"", p.PID, p.GPUIndex)
-		if p.GPUUUID != "" {
-			labels += fmt.Sprintf(",gpu_uuid=\"%s\"", sanitizeLabel(p.GPUUUID))
-		}
-		fmt.Fprintf(w, "llamaswap_gpu_process_memory_bytes{%s} %d\n",
-			labels, int64(p.MemUsedMB)*mbToBytes)
+		fmt.Fprintf(w, "llamaswap_gpu_process_memory_bytes{pid=\"%d\"} %d\n",
+			p.PID, int64(p.MemUsedMB)*mbToBytes)
 	}
 }
 
@@ -152,8 +146,7 @@ func latestPerGPU(stats []GpuStat) []GpuStat {
 }
 
 // latestPerProcess returns the most recent GpuProcStat for each PID.
-// ponytail: could deduplicate by PID+GPU, but a process typically uses one GPU.
-// Add composite key if multi-GPU per process becomes a thing.
+// Since stats are already aggregated by PID, this just deduplicates snapshots.
 func latestPerProcess(stats []GpuProcStat) []GpuProcStat {
 	latest := make(map[int]GpuProcStat)
 	for _, p := range stats {

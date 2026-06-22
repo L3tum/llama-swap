@@ -586,27 +586,11 @@ func readSysStats() (SysStat, error) {
 
 
 // getGpuProcStats polls nvidia-smi --query-compute-apps for per-process GPU
-// memory usage. Single process spawn covers all GPUs. Returns ErrNoGpuTool if
-// nvidia-smi is unavailable.
+// memory usage. Single process spawn covers all GPUs. Memory is aggregated
+// by PID across GPUs. Returns ErrNoGpuTool if nvidia-smi is unavailable.
 func getGpuProcStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuProcStat, error) {
 	if _, err := exec.LookPath("nvidia-smi"); err != nil {
 		return nil, ErrNoGpuTool
-	}
-
-	// Build a GPU index->UUID map for correlation.
-	// --query-compute-apps reports GPU by index, not UUID.
-	gpuUUIDs := make(map[int]string)
-	if out, err := exec.CommandContext(ctx, "nvidia-smi",
-		"--query-gpu=index,uuid",
-		"--format=csv,noheader,nounits").Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			fields := strings.Split(line, ",")
-			if len(fields) >= 2 {
-				if idx, err := strconv.Atoi(strings.TrimSpace(fields[0])); err == nil {
-					gpuUUIDs[idx] = strings.TrimSpace(fields[1])
-				}
-			}
-		}
 	}
 
 	ch := make(chan []GpuProcStat, 1)
@@ -630,7 +614,7 @@ func getGpuProcStats(ctx context.Context, every time.Duration, logger *logmon.Mo
 					continue
 				}
 
-				stats := parseNvidiaSmiComputeApps(string(out), gpuUUIDs)
+				stats := parseNvidiaSmiComputeApps(string(out))
 				if len(stats) > 0 {
 					select {
 					case ch <- stats:
@@ -646,62 +630,57 @@ func getGpuProcStats(ctx context.Context, every time.Duration, logger *logmon.Mo
 
 // parseNvidiaSmiComputeApps parses nvidia-smi --query-compute-apps output.
 // Format: pid, used_memory(MiB), compute_memory(MiB), gpu_instance_id, compute_instance_id, process_name
-// Note: process_name may contain commas (wrapped in quotes by nvidia-smi).
-func parseNvidiaSmiComputeApps(output string, gpuUUIDs map[int]string) []GpuProcStat {
-	var result []GpuProcStat
+// Aggregates memory by PID across GPUs. Note: process_name may contain commas.
+func parseNvidiaSmiComputeApps(output string) []GpuProcStat {
+	type procAccum struct {
+		memUsedMB   int
+		processName string
+	}
+	accum := make(map[int]*procAccum)
+
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		if stat := parseNvidiaSmiComputeAppLine(line, gpuUUIDs); stat != nil {
-			result = append(result, *stat)
+
+		reader := csv.NewReader(strings.NewReader(line))
+		fields, err := reader.Read()
+		if err != nil || len(fields) < 3 {
+			continue
 		}
+
+		pid, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+		if err != nil {
+			continue
+		}
+
+		memUsedMB, err := strconv.Atoi(strings.TrimSpace(fields[1]))
+		if err != nil {
+			continue
+		}
+
+		processName := strings.TrimSpace(fields[len(fields)-1])
+
+		if a, ok := accum[pid]; ok {
+			a.memUsedMB += memUsedMB
+			if a.processName == "" {
+				a.processName = processName
+			}
+		} else {
+			accum[pid] = &procAccum{memUsedMB: memUsedMB, processName: processName}
+		}
+	}
+
+	result := make([]GpuProcStat, 0, len(accum))
+	for pid, a := range accum {
+		result = append(result, GpuProcStat{
+			Timestamp:   time.Now(),
+			PID:         pid,
+			MemUsedMB:   a.memUsedMB,
+			ProcessName: a.processName,
+		})
 	}
 	return result
-}
-
-// parseNvidiaSmiComputeAppLine parses a single line from --query-compute-apps.
-// Uses CSV reader to handle quoted fields (process_name may contain commas).
-func parseNvidiaSmiComputeAppLine(line string, gpuUUIDs map[int]string) *GpuProcStat {
-	// Use CSV reader to handle quoted fields properly
-	reader := csv.NewReader(strings.NewReader(line))
-	fields, err := reader.Read()
-	if err != nil || len(fields) < 3 {
-		return nil
-	}
-
-	pid, err := strconv.Atoi(strings.TrimSpace(fields[0]))
-	if err != nil {
-		return nil
-	}
-
-	memUsedMB, err := strconv.Atoi(strings.TrimSpace(fields[1]))
-	if err != nil {
-		return nil
-	}
-
-	// process_name is the last field
-	processName := strings.TrimSpace(fields[len(fields)-1])
-
-	// Determine GPU index from gpu_instance_id if present, otherwise default to 0
-	gpuIndex := 0
-	if len(fields) >= 4 {
-		if idx, err := strconv.Atoi(strings.TrimSpace(fields[3])); err == nil {
-			gpuIndex = idx
-		}
-	}
-
-	// Look up UUID from our pre-built map
-	gpuUUID := gpuUUIDs[gpuIndex]
-
-	return &GpuProcStat{
-		Timestamp:   time.Now(),
-		PID:         pid,
-		GPUIndex:    gpuIndex,
-		GPUUUID:     gpuUUID,
-		MemUsedMB:   memUsedMB,
-		ProcessName: processName,
-	}
 }
