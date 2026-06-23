@@ -85,15 +85,3 @@ func (m *Monitor) startProcPolling(ctx context.Context) {
 	}()
 }
 
-// CurrentProcesses returns a snapshot of all buffered per-process GPU stats.
-func (m *Monitor) CurrentProcesses() []GpuProcStat {
-	m.mutex.RLock()
-	defer m.mutex.RUnlock()
-
-	snapshots := m.procRing.Slice()
-	var result []GpuProcStat
-	for _, snapshot := range snapshots {
-		result = append(result, snapshot...)
-	}
-	return result
-}

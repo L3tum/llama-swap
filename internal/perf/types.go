@@ -2,11 +2,15 @@ package perf
 
 import "time"
 
+// GpuProcStat represents per-process GPU memory usage from nvidia-smi.
+// Collected via --query-compute-apps which reports only CUDA compute contexts.
+// Memory is aggregated across all GPUs for each PID.
 type GpuProcStat struct {
-	Timestamp    time.Time `json:"timestamp"`
-	PID          int       `json:"pid"`
-	MemUsedMB    int       `json:"mem_used_mb"`
-	ProcessName  string    `json:"process_name"`
+	Timestamp   time.Time `json:"timestamp"`
+
+	PID         int    `json:"pid"`
+	MemUsedMB   int    `json:"mem_used_mb"` // total across all GPUs
+	ProcessName string `json:"process_name"`
 }
 
 type GpuStat struct {
@@ -23,17 +27,6 @@ type GpuStat struct {
 	MemTotalMB  int     `json:"mem_total_mb"`
 	FanSpeedPct float64 `json:"fan_speed_pct"`
 	PowerDrawW  float64 `json:"power_draw_w"`
-}
-
-// GpuProcStat represents per-process GPU memory usage from nvidia-smi.
-// Collected via --query-compute-apps which reports only CUDA compute contexts.
-// Memory is aggregated across all GPUs for each PID.
-type GpuProcStat struct {
-	Timestamp   time.Time `json:"timestamp"`
-
-	PID         int    `json:"pid"`
-	MemUsedMB   int    `json:"mem_used_mb"` // total across all GPUs
-	ProcessName string `json:"process_name"`
 }
 
 type NetIOStat struct {

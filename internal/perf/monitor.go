@@ -225,7 +225,7 @@ func (m *Monitor) CurrentProcesses() []GpuProcStat {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	snapshots := m.gpuProcRing.Slice()
+	snapshots := m.procRing.Slice()
 	var procs []GpuProcStat
 	for _, snapshot := range snapshots {
 		procs = append(procs, snapshot...)
