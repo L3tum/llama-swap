@@ -20,11 +20,9 @@ type Monitor struct {
 	mutex   sync.RWMutex
 	log     *logmon.Monitor
 	conf    config.PerformanceConfig
-	sysRing ring.Buffer[SysStat]
-	gpuRing ring.Buffer[[]GpuStat]
-	// ponytail: gpuProcRing is flat []GpuProcStat (all GPUs per snapshot).
-	// Per-GPU grouping would need a wrapper struct; not worth it until needed.
-	gpuProcRing ring.Buffer[[]GpuProcStat]
+	sysRing      ring.Buffer[SysStat]
+	gpuRing      ring.Buffer[[]GpuStat]
+	procRing     ring.Buffer[[]GpuProcStat]
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -54,14 +52,13 @@ func New(c config.PerformanceConfig, logger *logmon.Monitor) (*Monitor, error) {
 
 	capacity := ringCapacity(c)
 	return &Monitor{
-		conf:           c,
-		log:            logger,
-		sysRing:        ring.NewBuffer[SysStat](capacity),
-		gpuRing:        ring.NewBuffer[[]GpuStat](capacity),
-		gpuProcRing:    ring.NewBuffer[[]GpuProcStat](capacity),
-		sysListeners:   make(map[chan SysStat]struct{}),
-		gpuListeners:   make(map[chan []GpuStat]struct{}),
-		gpuProcListeners: make(map[chan []GpuProcStat]struct{}),
+		conf:         c,
+		log:          logger,
+		sysRing:      ring.NewBuffer[SysStat](capacity),
+		gpuRing:      ring.NewBuffer[[]GpuStat](capacity),
+		procRing:     ring.NewBuffer[[]GpuProcStat](capacity),
+		sysListeners: make(map[chan SysStat]struct{}),
+		gpuListeners: make(map[chan []GpuStat]struct{}),
 	}, nil
 }
 
@@ -91,7 +88,7 @@ func (m *Monitor) UpdateConfig(newConf config.PerformanceConfig) {
 	capacity := ringCapacity(newConf)
 	m.sysRing = ring.NewBuffer[SysStat](capacity)
 	m.gpuRing = ring.NewBuffer[[]GpuStat](capacity)
-	m.gpuProcRing = ring.NewBuffer[[]GpuProcStat](capacity)
+	m.procRing = ring.NewBuffer[[]GpuProcStat](capacity)
 	m.mutex.Unlock()
 	if !newConf.Disabled {
 		m.Start()
@@ -204,43 +201,8 @@ func (m *Monitor) Start() {
 		}
 	}()
 
-	// ponytail: process monitoring is a separate goroutine, gated by config.
-	// Could merge with GPU stats goroutine, but adds complexity for no benefit.
-	go func() {
-		if !m.conf.MonitorProcesses {
-			return
-		}
-		procCh, err := getGpuProcStats(m.stopCtx, m.conf.Every, m.log)
-		if err != nil {
-			if errors.Is(err, ErrNotImplemented) || errors.Is(err, ErrNoGpuTool) {
-				m.log.Infof("GPU process monitoring not available: %s", err.Error())
-			} else {
-				m.log.Errorf("failed to initialize GPU process monitoring: %s", err.Error())
-			}
-			return
-		}
-
-		for {
-			select {
-			case <-m.stopCtx.Done():
-				return
-			case p, ok := <-procCh:
-				if !ok {
-					m.log.Errorf("failed reading from procCh - stopping read goroutine")
-					return
-				}
-				m.mutex.Lock()
-				m.gpuProcRing.Push(p)
-				for l := range m.gpuProcListeners {
-					select {
-					case l <- p:
-					default:
-					}
-				}
-				m.mutex.Unlock()
-			}
-		}
-	}()
+	// Start per-process GPU VRAM polling.
+	m.startProcPolling(m.stopCtx)
 }
 
 // Current returns a copy of the current log of system and GPU stats.

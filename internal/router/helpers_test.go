@@ -175,6 +175,8 @@ func (f *fakeProcess) WaitReady(ctx context.Context) error {
 
 func (f *fakeProcess) Logger() *logmon.Monitor { return logmon.NewWriter(io.Discard) }
 
+func (f *fakeProcess) Pid() int { return 0 }
+
 func (f *fakeProcess) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	f.serveCalls.Add(1)
 	f.inFlightServe.Add(1)
