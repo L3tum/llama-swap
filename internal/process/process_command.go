@@ -85,6 +85,7 @@ type ProcessCommand struct {
 
 	lastUse  atomic.Int64 // unix nano timestamp of last ServeHTTP completion
 	inflight atomic.Int64 // current in-flight ServeHTTP calls
+	pid      atomic.Int32 // OS process ID of the running upstream (0 when stopped)
 }
 
 var _ Process = (*ProcessCommand)(nil)
@@ -191,6 +192,7 @@ func (p *ProcessCommand) run() {
 				cmd = nil
 				cmdDone = nil
 				cmdCancel = nil
+				p.pid.Store(0)
 			}
 			notifyWaiters(fmt.Errorf("[%s] shutdown", p.id))
 			respondRun(fmt.Errorf("[%s] shutdown", p.id))
@@ -208,6 +210,7 @@ func (p *ProcessCommand) run() {
 			cmdDone = nil
 			cmdCancel = nil
 			p.handler.Store(nil)
+			p.pid.Store(0)
 			setState(StateStopped)
 			respondRun(fmt.Errorf("[%s] upstream exited unexpectedly", p.id))
 
@@ -255,6 +258,7 @@ func (p *ProcessCommand) run() {
 					cmd = res.cmd
 					cmdDone = res.cmdDone
 					cmdCancel = res.cancel
+					p.pid.Store(int32(res.cmd.Process.Pid))
 					fn := res.handlerFn
 					p.handler.Store(&fn)
 					setState(StateReady)
@@ -344,6 +348,7 @@ func (p *ProcessCommand) run() {
 				cmdDone = nil
 				cmdCancel = nil
 				p.handler.Store(nil)
+				p.pid.Store(0)
 			}
 			// Stop is a no-op (and not an error) when already Stopped — this
 			// is what makes it idempotent for callers that don't track state.
@@ -681,4 +686,8 @@ func (p *ProcessCommand) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.inflight.Add(-1)
 	}()
 	(*fn)(w, r)
+}
+
+func (p *ProcessCommand) Pid() int {
+	return int(p.pid.Load())
 }

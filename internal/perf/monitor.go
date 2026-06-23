@@ -20,8 +20,9 @@ type Monitor struct {
 	mutex   sync.RWMutex
 	log     *logmon.Monitor
 	conf    config.PerformanceConfig
-	sysRing ring.Buffer[SysStat]
-	gpuRing ring.Buffer[[]GpuStat]
+	sysRing      ring.Buffer[SysStat]
+	gpuRing      ring.Buffer[[]GpuStat]
+	procRing     ring.Buffer[[]GpuProcStat]
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
@@ -54,6 +55,7 @@ func New(c config.PerformanceConfig, logger *logmon.Monitor) (*Monitor, error) {
 		log:          logger,
 		sysRing:      ring.NewBuffer[SysStat](capacity),
 		gpuRing:      ring.NewBuffer[[]GpuStat](capacity),
+		procRing:     ring.NewBuffer[[]GpuProcStat](capacity),
 		sysListeners: make(map[chan SysStat]struct{}),
 		gpuListeners: make(map[chan []GpuStat]struct{}),
 	}, nil
@@ -85,6 +87,7 @@ func (m *Monitor) UpdateConfig(newConf config.PerformanceConfig) {
 	capacity := ringCapacity(newConf)
 	m.sysRing = ring.NewBuffer[SysStat](capacity)
 	m.gpuRing = ring.NewBuffer[[]GpuStat](capacity)
+	m.procRing = ring.NewBuffer[[]GpuProcStat](capacity)
 	m.mutex.Unlock()
 	if !newConf.Disabled {
 		m.Start()
@@ -180,6 +183,9 @@ func (m *Monitor) Start() {
 			}
 		}
 	}()
+
+	// Start per-process GPU VRAM polling.
+	m.startProcPolling(m.stopCtx)
 }
 
 // Current returns a copy of the current log of system and GPU stats.

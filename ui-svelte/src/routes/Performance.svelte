@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { fetchPerformance } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
-  import type { SysStat, GpuStat } from "../lib/types";
+  import type { SysStat, GpuStat, GpuProcStat } from "../lib/types";
   import PerformanceChart from "../components/PerformanceChart.svelte";
 
   const COLORS = [
@@ -42,6 +42,7 @@
   let selectedInterval = persistentStore("perf-refresh-interval", 0);
   let sysData = $state<SysStat[]>([]);
   let gpuData = $state<GpuStat[]>([]);
+  let procData = $state<GpuProcStat[]>([]);
   let refreshing = $state(false);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -76,6 +77,7 @@
     if (resp) {
       sysData = resp.sys_stats ?? [];
       gpuData = resp.gpu_stats ?? [];
+      procData = resp.gpu_proc_stats ?? [];
     }
   }
 
@@ -85,11 +87,15 @@
     if (resp) {
       const newSys = resp.sys_stats ?? [];
       const newGpu = resp.gpu_stats ?? [];
+      const newProc = resp.gpu_proc_stats ?? [];
       if (newSys.length > 0) {
         sysData = [...sysData, ...newSys];
       }
       if (newGpu.length > 0) {
         gpuData = [...gpuData, ...newGpu];
+      }
+      if (newProc.length > 0) {
+        procData = [...procData, ...newProc];
       }
     }
   }
@@ -348,6 +354,19 @@
   const gpuVramTempDatasets = $derived(buildGpuDatasets(filteredGpuStats, "vram_temp_c"));
   const gpuPowerDatasets = $derived(buildGpuDatasets(filteredGpuStats, "power_draw_w"));
   const hasVramTemp = $derived(filteredGpuStats.some((g) => g.vram_temp_c > 0));
+
+  // Latest per-process GPU stats: deduplicate by PID, keep most recent entry.
+  const latestProcs = $derived.by(() => {
+    if (procData.length === 0) return [];
+    const byPid = new Map<number, GpuProcStat>();
+    for (const p of procData) {
+      const prev = byPid.get(p.pid);
+      if (!prev || new Date(p.timestamp).getTime() > new Date(prev.timestamp).getTime()) {
+        byPid.set(p.pid, p);
+      }
+    }
+    return [...byPid.values()].sort((a, b) => b.mem_used_mb - a.mem_used_mb);
+  });
 </script>
 
 <div class="space-y-6">
@@ -455,6 +474,35 @@
       </div>
     {/if}
   </section>
+
+  <!-- GPU Processes Section -->
+  {#if latestProcs.length > 0}
+    <section class="space-y-4">
+      <h3 class="text-lg font-medium text-txtmain">GPU Processes</h3>
+      <div class="card overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left border-b border-gray-200 dark:border-white/10">
+              <th class="pb-2 px-2">PID</th>
+              <th class="pb-2 px-2">Process</th>
+              <th class="pb-2 px-2 text-right">VRAM</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each latestProcs as proc}
+              <tr class="border-b border-gray-100 dark:border-white/5">
+                <td class="py-1 px-2 font-mono text-xs">{proc.pid}</td>
+                <td class="py-1 px-2">{proc.process_name || "(unknown)"}</td>
+                <td class="py-1 px-2 text-right font-medium">
+                  {(proc.mem_used_mb / 1024).toFixed(1)} GB
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {/if}
 
   <!-- System Section -->
   <section class="space-y-4">
