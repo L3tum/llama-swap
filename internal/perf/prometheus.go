@@ -24,8 +24,7 @@ func (m *Monitor) MetricsHandler() http.HandlerFunc {
 			writeGpuMetrics(w, latestPerGPU(gpuStats))
 		}
 
-		// ponytail: process metrics are exposed only if monitoring is enabled.
-		// Could gate on m.conf.MonitorProcesses, but CurrentProcesses() handles it.
+		// ponytail: process metrics exposed when nvidia-smi reports compute contexts.
 		procStats := m.CurrentProcesses()
 		if len(procStats) > 0 {
 			writeGpuProcMetrics(w, latestPerProcess(procStats))

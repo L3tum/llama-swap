@@ -27,9 +27,8 @@ type Monitor struct {
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 
-	sysListeners  map[chan SysStat]struct{}
-	gpuListeners  map[chan []GpuStat]struct{}
-	gpuProcListeners map[chan []GpuProcStat]struct{}
+	sysListeners map[chan SysStat]struct{}
+	gpuListeners map[chan []GpuStat]struct{}
 }
 
 func ringCapacity(c config.PerformanceConfig) int {
@@ -113,22 +112,6 @@ func (m *Monitor) Subscribe() (chan SysStat, chan []GpuStat, func()) {
 	}
 
 	return sysChan, gpuChan, unsub
-}
-
-// SubscribeProcesses returns a channel to listen to per-process GPU stats.
-func (m *Monitor) SubscribeProcesses() (chan []GpuProcStat, func()) {
-	m.mutex.Lock()
-	defer m.mutex.Unlock()
-	ch := make(chan []GpuProcStat, 1)
-	m.gpuProcListeners[ch] = struct{}{}
-
-	unsub := func() {
-		m.mutex.Lock()
-		defer m.mutex.Unlock()
-		delete(m.gpuProcListeners, ch)
-	}
-
-	return ch, unsub
 }
 
 func (m *Monitor) Start() {
