@@ -61,11 +61,12 @@ func CollectGpuProcs() []GpuProcStat {
 	return result
 }
 
-// StartProcPolling starts a goroutine that periodically collects GPU process
-// stats and pushes them to the procRing. Returns a stop function.
-func (m *Monitor) startProcPolling(ctx context.Context) {
+// startProcPolling starts a goroutine that periodically collects GPU process
+// stats and pushes them to the procRing. The interval is captured at call time
+// so it remains stable even if UpdateConfig replaces the config.
+func (m *Monitor) startProcPolling(ctx context.Context, every time.Duration) {
 	go func() {
-		ticker := time.NewTicker(m.conf.Every)
+		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 
 		for {

@@ -185,10 +185,11 @@ func (m *Monitor) Start() {
 	}()
 
 	// Start per-process GPU VRAM polling.
-	m.startProcPolling(m.stopCtx)
+	m.startProcPolling(m.stopCtx, m.conf.Every)
 }
 
-// Current returns a copy of the current log of system and GPU stats.
+// Current returns a copy of the full history of system and GPU stats.
+// Use Latest() for the most recent snapshot only (O(1) vs O(N)).
 func (m *Monitor) Current() ([]SysStat, []GpuStat) {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
@@ -203,7 +204,27 @@ func (m *Monitor) Current() ([]SysStat, []GpuStat) {
 	return sysStats, gpuStats
 }
 
-// CurrentProcesses returns a copy of the current log of per-process GPU stats.
+// Latest returns the most recent system and GPU snapshot.
+// Returns nil slices if no data has been collected yet.
+// This is O(1) compared to Current() which is O(N) over the full ring buffer.
+func (m *Monitor) Latest() (SysStat, []GpuStat) {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	var sysStat SysStat
+	if latest, ok := m.sysRing.Latest(); ok {
+		sysStat = latest
+	}
+
+	var gpuStats []GpuStat
+	if latest, ok := m.gpuRing.Latest(); ok {
+		gpuStats = latest
+	}
+	return sysStat, gpuStats
+}
+
+// CurrentProcesses returns a copy of the full history of per-process GPU stats.
+// Use LatestProcesses() for the most recent snapshot only (O(1) vs O(N)).
 func (m *Monitor) CurrentProcesses() []GpuProcStat {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
@@ -214,6 +235,20 @@ func (m *Monitor) CurrentProcesses() []GpuProcStat {
 		procs = append(procs, snapshot...)
 	}
 	return procs
+}
+
+// LatestProcesses returns the most recent per-process GPU stats snapshot.
+// Returns nil if no data has been collected yet.
+// This is O(1) compared to CurrentProcesses() which is O(N) over the full ring buffer.
+func (m *Monitor) LatestProcesses() []GpuProcStat {
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+
+	latest, ok := m.procRing.Latest()
+	if !ok {
+		return nil
+	}
+	return latest
 }
 
 func ReadSysStats() (SysStat, error) {

@@ -35,10 +35,10 @@ type apiModel struct {
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningModels()
 
-	// Build PID -> VRAM map from current process stats.
+	// Build PID -> VRAM map from latest process stats (O(1) vs O(N) with CurrentProcesses).
 	vramByPID := make(map[int]int)
 	if s.perf != nil {
-		for _, p := range s.perf.CurrentProcesses() {
+		for _, p := range s.perf.LatestProcesses() {
 			vramByPID[p.PID] = p.MemUsedMB
 		}
 	}

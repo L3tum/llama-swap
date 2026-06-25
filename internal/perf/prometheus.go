@@ -3,7 +3,6 @@ package perf
 import (
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 )
 
@@ -13,21 +12,21 @@ const mbToBytes = int64(1024 * 1024)
 // with the most recent system and GPU stats.
 func (m *Monitor) MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		sysStats, gpuStats := m.Current()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
-		if len(sysStats) > 0 {
-			writeSysMetrics(w, sysStats[len(sysStats)-1])
+		sysStat, gpuStats := m.Latest()
+		if !sysStat.Timestamp.IsZero() {
+			writeSysMetrics(w, sysStat)
 		}
 
 		if len(gpuStats) > 0 {
-			writeGpuMetrics(w, latestPerGPU(gpuStats))
+			writeGpuMetrics(w, gpuStats)
 		}
 
 		// ponytail: process metrics exposed when nvidia-smi reports compute contexts.
-		procStats := m.CurrentProcesses()
+		procStats := m.LatestProcesses()
 		if len(procStats) > 0 {
-			writeGpuProcMetrics(w, latestPerProcess(procStats))
+			writeGpuProcMetrics(w, procStats)
 		}
 	}
 }
@@ -126,39 +125,6 @@ func writeGpuProcMetrics(w http.ResponseWriter, procs []GpuProcStat) {
 		fmt.Fprintf(w, "llamaswap_gpu_process_memory_bytes{pid=\"%d\"} %d\n",
 			p.PID, int64(p.MemUsedMB)*mbToBytes)
 	}
-}
-
-// latestPerGPU returns the most recent GpuStat for each GPU ID, sorted by ID.
-func latestPerGPU(stats []GpuStat) []GpuStat {
-	latest := make(map[int]GpuStat)
-	for _, g := range stats {
-		if prev, ok := latest[g.ID]; !ok || g.Timestamp.After(prev.Timestamp) {
-			latest[g.ID] = g
-		}
-	}
-	result := make([]GpuStat, 0, len(latest))
-	for _, g := range latest {
-		result = append(result, g)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result
-}
-
-// latestPerProcess returns the most recent GpuProcStat for each PID.
-// Since stats are already aggregated by PID, this just deduplicates snapshots.
-func latestPerProcess(stats []GpuProcStat) []GpuProcStat {
-	latest := make(map[int]GpuProcStat)
-	for _, p := range stats {
-		if prev, ok := latest[p.PID]; !ok || p.Timestamp.After(prev.Timestamp) {
-			latest[p.PID] = p
-		}
-	}
-	result := make([]GpuProcStat, 0, len(latest))
-	for _, p := range latest {
-		result = append(result, p)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].PID < result[j].PID })
-	return result
 }
 
 // sanitizeLabel escapes characters that are invalid in Prometheus label values.

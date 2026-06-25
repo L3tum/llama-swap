@@ -47,3 +47,15 @@ func (r *Buffer[T]) Slice() []T {
 	}
 	return result
 }
+
+// Latest returns the most recently pushed entry, or the zero value if empty.
+// Returns the value and true if the buffer is non-empty, or the zero value and false.
+func (r *Buffer[T]) Latest() (T, bool) {
+	if r.size == 0 {
+		var zero T
+		return zero, false
+	}
+	// The most recent entry is at position (head + size - 1) % cap.
+	idx := (r.head + r.size - 1) % len(r.buf)
+	return r.buf[idx], true
+}

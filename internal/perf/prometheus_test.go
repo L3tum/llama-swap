@@ -29,46 +29,6 @@ func TestSanitizeLabel(t *testing.T) {
 	}
 }
 
-func TestLatestPerGPU_Empty(t *testing.T) {
-	result := latestPerGPU(nil)
-	assert.Empty(t, result)
-}
-
-func TestLatestPerGPU_Single(t *testing.T) {
-	now := time.Now()
-	stats := []GpuStat{{ID: 0, Name: "gpu0", Timestamp: now}}
-	result := latestPerGPU(stats)
-	require.Len(t, result, 1)
-	assert.Equal(t, "gpu0", result[0].Name)
-}
-
-func TestLatestPerGPU_PicksLatest(t *testing.T) {
-	earlier := time.Now().Add(-time.Second)
-	later := time.Now()
-	stats := []GpuStat{
-		{ID: 0, Name: "old", TempC: 50, Timestamp: earlier},
-		{ID: 0, Name: "new", TempC: 70, Timestamp: later},
-	}
-	result := latestPerGPU(stats)
-	require.Len(t, result, 1)
-	assert.Equal(t, "new", result[0].Name)
-	assert.Equal(t, 70, result[0].TempC)
-}
-
-func TestLatestPerGPU_MultipleGPUsSortedByID(t *testing.T) {
-	now := time.Now()
-	stats := []GpuStat{
-		{ID: 2, Name: "gpu2", Timestamp: now},
-		{ID: 0, Name: "gpu0", Timestamp: now},
-		{ID: 1, Name: "gpu1", Timestamp: now},
-	}
-	result := latestPerGPU(stats)
-	require.Len(t, result, 3)
-	assert.Equal(t, 0, result[0].ID)
-	assert.Equal(t, 1, result[1].ID)
-	assert.Equal(t, 2, result[2].ID)
-}
-
 func TestWriteSysMetrics(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := SysStat{
