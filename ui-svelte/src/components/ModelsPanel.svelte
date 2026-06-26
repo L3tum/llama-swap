@@ -4,6 +4,13 @@
   import { persistentStore } from "../stores/persistent";
   import type { Model } from "../lib/types";
 
+  interface Props {
+    onSelectModel?: (modelID: string) => void;
+    selectedModel?: string | null;
+  }
+
+  let { onSelectModel, selectedModel = null }: Props = $props();
+
   let isUnloading = $state(false);
   let menuOpen = $state(false);
 
@@ -157,11 +164,24 @@
       </thead>
       <tbody>
         {#each filteredModels.regularModels as model (model.id)}
-          <tr class="border-b hover:bg-secondary-hover border-gray-200">
+          <tr class="border-b hover:bg-secondary-hover border-gray-200 {selectedModel === model.id ? 'bg-secondary' : ''}">
             <td class={model.unlisted ? "text-txtsecondary" : ""}>
-              <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
-                {getModelDisplay(model)}
-              </a>
+              <div class="inline-flex items-center gap-2">
+                <a href="/upstream/{model.id}/" class="font-semibold" target="_blank">
+                  {getModelDisplay(model)}
+                </a>
+                {#if onSelectModel}
+                  <button
+                    class="btn btn--sm border-0 {selectedModel === model.id ? 'text-primary' : ''}"
+                    aria-pressed={selectedModel === model.id}
+                    aria-label="Show logs for {getModelDisplay(model)}"
+                    title="Show model logs"
+                    onclick={() => onSelectModel?.(model.id)}
+                  >
+                    logs
+                  </button>
+                {/if}
+              </div>
               {#if model.description}
                 <p class={model.unlisted ? "text-opacity-70" : ""}><em>{model.description}</em></p>
               {/if}

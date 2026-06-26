@@ -149,3 +149,40 @@ func TestServer_APIEvents_ProcessUpdateSendsModelStatus(t *testing.T) {
 		t.Fatalf("modelStatus events = %d, want at least 2; body=%q", got, w.Body.String())
 	}
 }
+
+func TestServer_APIEvents_ModelLogPayload(t *testing.T) {
+	modelLogger := logmon.NewWriter(io.Discard)
+	if _, err := modelLogger.Write([]byte("model log\n")); err != nil {
+		t.Fatalf("write model log: %v", err)
+	}
+
+	local := newStubRouter([]string{"model-a"}, "")
+	local.loggers = map[string]*logmon.Monitor{"model-a": modelLogger}
+	s := newTestServer(local, newStubRouter(nil, ""))
+	s.cfg.Models = map[string]config.ModelConfig{"model-a": {}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		s.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after context cancel")
+	}
+
+	body := w.Body.String()
+	for _, want := range []string{`\"source\":\"upstream\"`, `\"model\":\"model-a\"`, `model log`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("model log payload missing %s; body=%q", want, body)
+		}
+	}
+}

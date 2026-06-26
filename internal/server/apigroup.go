@@ -278,8 +278,12 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			send(messageEnvelope{Type: msgTypeModelStatus, Data: string(data)})
 		}
 	}
-	sendLogData := func(source string, data []byte) {
-		if j, err := json.Marshal(map[string]string{"source": source, "data": string(data)}); err == nil {
+	sendLogData := func(source string, data []byte, modelID string) {
+		payload := map[string]string{"source": source, "data": string(data)}
+		if modelID != "" {
+			payload["model"] = modelID
+		}
+		if j, err := json.Marshal(payload); err == nil {
 			send(messageEnvelope{Type: msgTypeLogData, Data: string(j)})
 		}
 	}
@@ -314,8 +318,16 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 
 	defer event.On(func(e shared.ProcessStateChangeEvent) { sendModels() })()
 	defer event.On(func(e shared.ConfigFileChangedEvent) { sendModels() })()
-	defer s.proxylog.OnLogData(func(data []byte) { sendLogData("proxy", data) })()
-	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data) })()
+	defer s.proxylog.OnLogData(func(data []byte) { sendLogData("proxy", data, "") })()
+	defer s.upstreamlog.OnLogData(func(data []byte) { sendLogData("upstream", data, "") })()
+	for modelID := range s.cfg.Models {
+		modelID := modelID
+		logger, ok := s.local.ProcessLogger(modelID)
+		if !ok || logger == nil {
+			continue
+		}
+		defer logger.OnLogData(func(data []byte) { sendLogData("upstream", data, modelID) })()
+	}
 	defer event.On(func(e ActivityLogEvent) { sendMetrics([]ActivityLogEntry{e.Metrics}) })()
 	defer event.On(func(e shared.InFlightRequestsEvent) { sendInFlight(e.Total) })()
 	defer event.On(func(e shared.MetricsSnapshotEvent) {
@@ -323,8 +335,17 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	})()
 
 	// initial payload
-	sendLogData("proxy", s.proxylog.GetHistory())
-	sendLogData("upstream", s.upstreamlog.GetHistory())
+	sendLogData("proxy", s.proxylog.GetHistory(), "")
+	sendLogData("upstream", s.upstreamlog.GetHistory(), "")
+	for modelID := range s.cfg.Models {
+		logger, ok := s.local.ProcessLogger(modelID)
+		if !ok || logger == nil {
+			continue
+		}
+		if history := logger.GetHistory(); len(history) > 0 {
+			sendLogData("upstream", history, modelID)
+		}
+	}
 	sendModels()
 	// Send the first page of metrics (most recent entries) as a paginated snapshot.
 	sendMetricsSnapshot()

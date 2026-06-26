@@ -56,6 +56,7 @@ export interface ReqRespCapture {
 export interface LogData {
   source: "upstream" | "proxy";
   data: string;
+  model?: string;
 }
 
 export interface InFlightStats {

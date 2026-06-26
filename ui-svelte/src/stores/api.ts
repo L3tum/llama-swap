@@ -1,3 +1,4 @@
+// @ts-ignore - project-local Svelte tooling resolves this package from ui-svelte/node_modules.
 import { writable } from "svelte/store";
 import type {
   Model,
@@ -10,6 +11,7 @@ import type {
   PerformanceResponse,
   MetricsResponse,
   MetricsClearResponse,
+  ConnectionState,
 } from "../lib/types";
 import { connectionState } from "./theme";
 
@@ -20,13 +22,15 @@ const METRICS_PAGE_SIZE = 50;
 export const models = writable<Model[]>([]);
 export const proxyLogs = writable<string>("");
 export const upstreamLogs = writable<string>("");
+export const modelLogs = writable<Record<string, string>>({});
+export const selectedModel = writable<string | null>(null);
 export const metrics = writable<ActivityLogEntry[]>([]);
 export const metricsTotal = writable<number>(0);
 export const metricsHasMore = writable<boolean>(false);
 export const metricsLoading = writable<boolean>(false);
 // Persistent subscription to read current metrics value without subscribe() anti-pattern.
 let currentMetricsValue: ActivityLogEntry[] = [];
-metrics.subscribe((v) => { currentMetricsValue = v; });
+metrics.subscribe((v: ActivityLogEntry[]) => { currentMetricsValue = v; });
 export const inFlightRequests = writable<number>(0);
 export const versionInfo = writable<VersionInfo>({
   build_date: "unknown",
@@ -36,11 +40,33 @@ export const versionInfo = writable<VersionInfo>({
 
 let apiEventSource: EventSource | null = null;
 
-function appendLog(newData: string, store: typeof proxyLogs | typeof upstreamLogs): void {
-  store.update((prev) => {
+type LogStore = {
+  update(updater: (prev: string) => string): void;
+};
+
+type MetricsStore = {
+  update(updater: (prev: ActivityLogEntry[]) => ActivityLogEntry[]): void;
+};
+
+function appendLog(newData: string, store: LogStore): void {
+  store.update((prev: string) => {
     const updatedLog = prev + newData;
     return updatedLog.length > LOG_LENGTH_LIMIT ? updatedLog.slice(-LOG_LENGTH_LIMIT) : updatedLog;
   });
+}
+
+function appendModelLog(modelID: string, newData: string): void {
+  modelLogs.update((prev: Record<string, string>) => {
+    const updatedLog = (prev[modelID] ?? "") + newData;
+    return {
+      ...prev,
+      [modelID]: updatedLog.length > LOG_LENGTH_LIMIT ? updatedLog.slice(-LOG_LENGTH_LIMIT) : updatedLog,
+    };
+  });
+}
+
+export function toggleModelSelection(modelID: string): void {
+  selectedModel.update((currentModel: string | null) => (currentModel === modelID ? null : modelID));
 }
 
 export function enableAPIEvents(enabled: boolean): void {
@@ -50,6 +76,8 @@ export function enableAPIEvents(enabled: boolean): void {
     metrics.set([]);
     metricsTotal.set(0);
     metricsHasMore.set(false);
+    modelLogs.set({});
+    selectedModel.set(null);
     inFlightRequests.set(0);
     return;
   }
@@ -67,6 +95,7 @@ export function enableAPIEvents(enabled: boolean): void {
       // Clear everything on connect to keep things in sync
       proxyLogs.set("");
       upstreamLogs.set("");
+      modelLogs.set({});
       metrics.set([]);
       metricsTotal.set(0);
       metricsHasMore.set(false);
@@ -92,6 +121,10 @@ export function enableAPIEvents(enabled: boolean): void {
 
           case "logData": {
             const logData = JSON.parse(message.data) as LogData;
+            if (logData.model) {
+              appendModelLog(logData.model, logData.data);
+              break;
+            }
             switch (logData.source) {
               case "proxy":
                 appendLog(logData.data, proxyLogs);
@@ -110,7 +143,7 @@ export function enableAPIEvents(enabled: boolean): void {
             if (Array.isArray(parsed)) {
               // Real-time push: prepend new entries
               const newMetrics = parsed as ActivityLogEntry[];
-              metrics.update((prevMetrics) => [...newMetrics, ...prevMetrics]);
+              (metrics as MetricsStore).update((prevMetrics: ActivityLogEntry[]) => [...newMetrics, ...prevMetrics]);
             } else {
               // Paginated initial snapshot
               const resp = parsed as MetricsResponse;
@@ -144,7 +177,7 @@ export function enableAPIEvents(enabled: boolean): void {
 }
 
 // Fetch version info when connected
-connectionState.subscribe(async (status) => {
+connectionState.subscribe(async (status: ConnectionState) => {
   if (status === "connected") {
     try {
       const response = await fetch("/api/version");
@@ -265,7 +298,7 @@ export async function loadMoreMetrics(): Promise<boolean> {
       return false;
     }
 
-    metrics.update((prev) => [...prev, ...data.entries]);
+    (metrics as MetricsStore).update((prev: ActivityLogEntry[]) => [...prev, ...data.entries]);
     metricsHasMore.set(data.hasMore);
     return true;
   } catch (error) {

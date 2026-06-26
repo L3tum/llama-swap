@@ -5,9 +5,10 @@
     id: string;
     title: string;
     logData: string;
+    onClear?: () => void;
   }
 
-  let { id, title, logData }: Props = $props();
+  let { id, title, logData, onClear }: Props = $props();
 
   let filterRegex = $state("");
 
@@ -84,7 +85,14 @@
 <div class="rounded-lg overflow-hidden flex flex-col bg-gray-950/5 dark:bg-white/10 h-full w-full p-1">
   <div class="p-4">
     <div class="flex items-center justify-between">
-      <h3 class="m-0 text-lg p-0">{title}</h3>
+      <div class="flex items-center gap-2 min-w-0">
+        <h3 class="m-0 text-lg p-0 truncate">{title}</h3>
+        {#if onClear}
+          <button class="btn btn--sm border-0" onclick={onClear} aria-label="Clear selected model logs" title="Show all upstream logs">
+            ×
+          </button>
+        {/if}
+      </div>
 
       <div class="flex gap-2 items-center">
         <button class="btn border-0" onclick={toggleFontSize} title="Change font size">
