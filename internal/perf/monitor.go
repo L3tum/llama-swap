@@ -269,6 +269,19 @@ func (m *Monitor) LatestProcesses() []GpuProcStat {
 	return latest
 }
 
+// RecordProcesses stores and publishes one per-process GPU snapshot.
+func (m *Monitor) RecordProcesses(procs []GpuProcStat) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.procRing.Push(procs)
+	for l := range m.procListeners {
+		select {
+		case l <- procs:
+		default:
+		}
+	}
+}
+
 func ReadSysStats() (SysStat, error) {
 	return readSysStats()
 }

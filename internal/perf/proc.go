@@ -102,16 +102,7 @@ func (m *Monitor) startProcPolling(ctx context.Context, every time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				procs := CollectGpuProcs()
-				m.mutex.Lock()
-				m.procRing.Push(procs)
-				for l := range m.procListeners {
-					select {
-					case l <- procs:
-					default:
-					}
-				}
-				m.mutex.Unlock()
+				m.RecordProcesses(CollectGpuProcs())
 			}
 		}
 	}()

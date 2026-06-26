@@ -64,7 +64,7 @@ func (s *Server) modelStatus() []apiModel {
 		// Correlate VRAM for running models. Match the tracked process PID and
 		// descendants so shell wrappers and named docker containers are included.
 		if proc := s.local.GetProcess(id); proc != nil {
-			m.VramMB = modelProcessVramMB(mc, proc.Pid(), procStats)
+			m.VramMB = s.modelProcessVramMB(id, mc, proc.Pid(), procStats)
 		}
 		models = append(models, m)
 	}

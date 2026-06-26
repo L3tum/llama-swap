@@ -3,11 +3,16 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/perf"
 )
 
 func TestServer_InflightMiddleware(t *testing.T) {
@@ -109,5 +114,38 @@ func TestServer_APIEvents_InitialPayload(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("initial SSE payload missing %s; body=%q", want, body)
 		}
+	}
+}
+
+func TestServer_APIEvents_ProcessUpdateSendsModelStatus(t *testing.T) {
+	mon, err := perf.New(config.PerformanceConfig{Every: time.Second}, logmon.NewWriter(io.Discard))
+	if err != nil {
+		t.Fatalf("new perf monitor: %v", err)
+	}
+	s := newTestServer(newStubRouter(nil, ""), newStubRouter(nil, ""))
+	s.perf = mon
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		s.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	mon.RecordProcesses([]perf.GpuProcStat{{PID: 123, MemUsedMB: 456}})
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not return after context cancel")
+	}
+
+	if got := strings.Count(w.Body.String(), `"type":"modelStatus"`); got < 2 {
+		t.Fatalf("modelStatus events = %d, want at least 2; body=%q", got, w.Body.String())
 	}
 }

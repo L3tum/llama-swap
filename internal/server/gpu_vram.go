@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
@@ -19,13 +20,62 @@ var (
 	dockerInspectContainerPID = defaultDockerInspectContainerPID
 )
 
+type dockerPIDCacheKey struct {
+	modelID string
+	procPID int
+}
+
+type dockerPIDCache struct {
+	mu      sync.Mutex
+	entries map[dockerPIDCacheKey][]int
+}
+
+func (c *dockerPIDCache) rootPIDs(modelID string, procPID int, mc config.ModelConfig) []int {
+	refs := dockerContainerRefs(mc)
+	if len(refs) == 0 {
+		return nil
+	}
+
+	key := dockerPIDCacheKey{modelID: modelID, procPID: procPID}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.entries == nil {
+		c.entries = make(map[dockerPIDCacheKey][]int)
+	}
+	for existing := range c.entries {
+		if existing.modelID == modelID && existing.procPID != procPID {
+			delete(c.entries, existing)
+		}
+	}
+	if pids, ok := c.entries[key]; ok {
+		return pids
+	}
+
+	pids := inspectDockerRootPIDs(refs)
+	if len(pids) > 0 {
+		c.entries[key] = pids
+	}
+	return pids
+}
+
+func (s *Server) modelProcessVramMB(modelID string, mc config.ModelConfig, procPID int, procStats []perf.GpuProcStat) int {
+	if procPID <= 0 || len(procStats) == 0 {
+		return 0
+	}
+
+	roots := []int{procPID}
+	roots = append(roots, s.vramCache.rootPIDs(modelID, procPID, mc)...)
+	return gpuProcessVramMB(roots, procStats)
+}
+
 func modelProcessVramMB(mc config.ModelConfig, procPID int, procStats []perf.GpuProcStat) int {
 	if procPID <= 0 || len(procStats) == 0 {
 		return 0
 	}
 
 	roots := []int{procPID}
-	roots = append(roots, dockerContainerRootPIDs(mc)...)
+	roots = append(roots, inspectDockerRootPIDs(dockerContainerRefs(mc))...)
 	return gpuProcessVramMB(roots, procStats)
 }
 
@@ -91,8 +141,7 @@ func defaultProcessParentPID(pid int) (int, error) {
 	return int(ppid), err
 }
 
-func dockerContainerRootPIDs(mc config.ModelConfig) []int {
-	refs := dockerContainerRefs(mc)
+func inspectDockerRootPIDs(refs []string) []int {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -133,17 +182,27 @@ func dockerContainerRefs(mc config.ModelConfig) []string {
 	refs := make([]string, 0, 2)
 	for i := runIdx + 1; i < len(args); i++ {
 		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			break
+		}
+
+		opt, _, hasValue := strings.Cut(arg, "=")
 		switch {
+		case opt == "--name" && hasValue:
+			refs = append(refs, strings.TrimPrefix(arg, "--name="))
+		case opt == "--cidfile" && hasValue:
+			refs = append(refs, readDockerCIDFile(strings.TrimPrefix(arg, "--cidfile=")))
 		case arg == "--name" && i+1 < len(args):
 			refs = append(refs, args[i+1])
 			i++
-		case strings.HasPrefix(arg, "--name="):
-			refs = append(refs, strings.TrimPrefix(arg, "--name="))
 		case arg == "--cidfile" && i+1 < len(args):
 			refs = append(refs, readDockerCIDFile(args[i+1]))
 			i++
-		case strings.HasPrefix(arg, "--cidfile="):
-			refs = append(refs, readDockerCIDFile(strings.TrimPrefix(arg, "--cidfile=")))
+		case dockerRunOptionTakesValue(opt) && !hasValue && i+1 < len(args):
+			i++
 		}
 	}
 
@@ -155,6 +214,55 @@ func dockerContainerRefs(mc config.ModelConfig) []string {
 		}
 	}
 	return out
+}
+
+func dockerRunOptionTakesValue(opt string) bool {
+	switch opt {
+	case "-a", "--attach",
+		"--add-host",
+		"--annotation",
+		"--blkio-weight",
+		"--blkio-weight-device",
+		"--cap-add", "--cap-drop",
+		"--cgroup-parent",
+		"--cpu-period", "--cpu-quota", "--cpu-rt-period", "--cpu-rt-runtime", "--cpu-shares", "-c", "--cpus", "--cpuset-cpus", "--cpuset-mems",
+		"--device", "--device-cgroup-rule", "--device-read-bps", "--device-read-iops", "--device-write-bps", "--device-write-iops",
+		"--dns", "--dns-option", "--dns-search",
+		"--domainname",
+		"--entrypoint",
+		"-e", "--env", "--env-file",
+		"--expose",
+		"--gpus",
+		"--group-add",
+		"-h", "--hostname",
+		"--health-cmd", "--health-interval", "--health-retries", "--health-start-interval", "--health-start-period", "--health-timeout",
+		"--ip", "--ip6", "--ipc",
+		"--isolation",
+		"--kernel-memory",
+		"-l", "--label", "--label-file",
+		"--link", "--link-local-ip", "--log-driver", "--log-opt",
+		"--mac-address",
+		"-m", "--memory", "--memory-reservation", "--memory-swap", "--memory-swappiness",
+		"--mount",
+		"--name",
+		"--network", "--network-alias",
+		"--oom-score-adj",
+		"--pid",
+		"--pids-limit",
+		"--platform",
+		"-p", "--publish",
+		"--pull",
+		"--restart",
+		"--runtime",
+		"--security-opt", "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl",
+		"--tmpfs",
+		"--ulimit", "-u", "--user", "--userns", "--uts",
+		"-v", "--volume", "--volume-driver", "--volumes-from",
+		"-w", "--workdir":
+		return true
+	default:
+		return false
+	}
 }
 
 func readDockerCIDFile(path string) string {

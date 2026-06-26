@@ -41,7 +41,7 @@ func TestServer_DockerContainerRefs(t *testing.T) {
 		t.Fatalf("write cidfile: %v", err)
 	}
 
-	refs := dockerContainerRefs(config.ModelConfig{Cmd: "docker run --rm --name llama-model --cidfile " + cidPath + " image"})
+	refs := dockerContainerRefs(config.ModelConfig{Cmd: "docker run --rm --env FOO=bar --gpus all --name llama-model --cidfile " + cidPath + " image"})
 	want := map[string]bool{"llama-model": true, "abc123": true}
 	if len(refs) != len(want) {
 		t.Fatalf("refs = %v, want two refs", refs)
@@ -50,6 +50,53 @@ func TestServer_DockerContainerRefs(t *testing.T) {
 		if !want[ref] {
 			t.Fatalf("unexpected ref %q in %v", ref, refs)
 		}
+	}
+}
+
+func TestServer_DockerContainerRefsStopsAtImage(t *testing.T) {
+	refs := dockerContainerRefs(config.ModelConfig{Cmd: "docker run --rm image --name not-the-container"})
+	if len(refs) != 0 {
+		t.Fatalf("refs = %v, want none after image", refs)
+	}
+}
+
+func TestServer_ModelProcessVramCachesDockerInspectByProcessPID(t *testing.T) {
+	oldParent := processParentPID
+	oldInspect := dockerInspectContainerPID
+	defer func() {
+		processParentPID = oldParent
+		dockerInspectContainerPID = oldInspect
+	}()
+
+	processParentPID = func(pid int) (int, error) {
+		parents := map[int]int{
+			900: 800,
+		}
+		return parents[pid], nil
+	}
+
+	inspectCalls := 0
+	dockerInspectContainerPID = func(ref string) (int, error) {
+		inspectCalls++
+		return 800, nil
+	}
+
+	s := &Server{}
+	mc := config.ModelConfig{Cmd: "docker run --rm --name llama-model image"}
+	procStats := []perf.GpuProcStat{{PID: 900, MemUsedMB: 4096}}
+
+	for i := 0; i < 2; i++ {
+		if got := s.modelProcessVramMB("m1", mc, 700, procStats); got != 4096 {
+			t.Fatalf("modelProcessVramMB() = %d, want 4096", got)
+		}
+	}
+	if inspectCalls != 1 {
+		t.Fatalf("inspectCalls = %d, want 1", inspectCalls)
+	}
+
+	_ = s.modelProcessVramMB("m1", mc, 701, procStats)
+	if inspectCalls != 2 {
+		t.Fatalf("inspectCalls after pid change = %d, want 2", inspectCalls)
 	}
 }
 
