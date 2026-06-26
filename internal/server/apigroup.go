@@ -163,7 +163,10 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sysStats, gpuStats := s.perf.Current()
-	procStats := s.perf.CurrentProcesses()
+	// Per-process GPU stats are a latest snapshot (not time series data). Empty
+	// snapshots are returned so clients can clear stale process rows when GPU
+	// processes exit.
+	procStats := s.perf.LatestProcesses()
 
 	if afterStr := r.URL.Query().Get("after"); afterStr != "" {
 		after, err := time.Parse(time.RFC3339, afterStr)
@@ -186,14 +189,6 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		gpuStats = filteredGpu
-
-		filteredProc := make([]perf.GpuProcStat, 0, len(procStats))
-		for _, p := range procStats {
-			if p.Timestamp.After(after) {
-				filteredProc = append(filteredProc, p)
-			}
-		}
-		procStats = filteredProc
 	}
 
 	w.Header().Set("Content-Type", "application/json")

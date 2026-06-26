@@ -3,6 +3,7 @@ package perf
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -16,8 +17,10 @@ func CollectGpuProcs() []GpuProcStat {
 		return nil
 	}
 
-	cmd := exec.Command("nvidia-smi",
-		"--query-compute-apps=pid,used_memory,name",
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "nvidia-smi",
+		"--query-compute-apps=pid,used_memory,process_name",
 		"--format=csv,noheader,nounits",
 	)
 	out, err := cmd.Output()
@@ -25,38 +28,61 @@ func CollectGpuProcs() []GpuProcStat {
 		return nil
 	}
 
-	// Aggregate by PID: sum used_memory across GPUs
-	byPID := make(map[int]*GpuProcStat)
-	scanner := bufio.NewScanner(strings.NewReader(string(out)))
+	return parseNvidiaSmiComputeApps(string(out))
+}
+
+// parseNvidiaSmiComputeApps parses nvidia-smi --query-compute-apps output.
+// Format: pid, used_memory(MiB), process_name. Memory is aggregated by PID
+// across GPUs. The process name is parsed as CSV because paths can contain
+// commas.
+func parseNvidiaSmiComputeApps(output string) []GpuProcStat {
+	type procAccum struct {
+		memUsedMB   int
+		processName string
+	}
+
+	byPID := make(map[int]*procAccum)
+	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		parts := strings.Split(line, ",")
-		if len(parts) < 3 {
+
+		fields, err := csv.NewReader(strings.NewReader(line)).Read()
+		if err != nil || len(fields) < 3 {
 			continue
 		}
 
-		pid, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
-		memMB, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
-		name := strings.TrimSpace(strings.Join(parts[2:], ","))
+		pid, err := strconv.Atoi(strings.TrimSpace(fields[0]))
+		if err != nil || pid <= 0 {
+			continue
+		}
+		memMB, err := strconv.Atoi(strings.TrimSpace(fields[1]))
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(strings.Join(fields[2:], ","))
 
 		if existing, ok := byPID[pid]; ok {
-			existing.MemUsedMB += memMB
-		} else {
-			byPID[pid] = &GpuProcStat{
-				Timestamp:   time.Now(),
-				PID:         pid,
-				MemUsedMB:   memMB,
-				ProcessName: name,
+			existing.memUsedMB += memMB
+			if existing.processName == "" {
+				existing.processName = name
 			}
+		} else {
+			byPID[pid] = &procAccum{memUsedMB: memMB, processName: name}
 		}
 	}
 
+	now := time.Now()
 	result := make([]GpuProcStat, 0, len(byPID))
-	for _, p := range byPID {
-		result = append(result, *p)
+	for pid, p := range byPID {
+		result = append(result, GpuProcStat{
+			Timestamp:   now,
+			PID:         pid,
+			MemUsedMB:   p.memUsedMB,
+			ProcessName: p.processName,
+		})
 	}
 	return result
 }
@@ -75,9 +101,6 @@ func (m *Monitor) startProcPolling(ctx context.Context, every time.Duration) {
 				return
 			case <-ticker.C:
 				procs := CollectGpuProcs()
-				if len(procs) == 0 {
-					continue
-				}
 				m.mutex.Lock()
 				m.procRing.Push(procs)
 				m.mutex.Unlock()

@@ -94,9 +94,7 @@
       if (newGpu.length > 0) {
         gpuData = [...gpuData, ...newGpu];
       }
-      if (newProc.length > 0) {
-        procData = [...procData, ...newProc];
-      }
+      procData = newProc;
     }
   }
 

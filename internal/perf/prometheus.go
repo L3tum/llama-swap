@@ -3,6 +3,7 @@ package perf
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -14,13 +15,14 @@ func (m *Monitor) MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
-		sysStat, gpuStats := m.Latest()
+		sysStat, _ := m.Latest()
 		if !sysStat.Timestamp.IsZero() {
 			writeSysMetrics(w, sysStat)
 		}
 
+		_, gpuStats := m.Current()
 		if len(gpuStats) > 0 {
-			writeGpuMetrics(w, gpuStats)
+			writeGpuMetrics(w, latestPerGPU(gpuStats))
 		}
 
 		// ponytail: process metrics exposed when nvidia-smi reports compute contexts.
@@ -110,6 +112,23 @@ func writeGpuMetrics(w http.ResponseWriter, gpus []GpuStat) {
 			}
 		}
 	}
+}
+
+// latestPerGPU returns the most recent GpuStat for each GPU ID, sorted by ID.
+func latestPerGPU(stats []GpuStat) []GpuStat {
+	latest := make(map[int]GpuStat)
+	for _, g := range stats {
+		if prev, ok := latest[g.ID]; !ok || g.Timestamp.After(prev.Timestamp) {
+			latest[g.ID] = g
+		}
+	}
+
+	result := make([]GpuStat, 0, len(latest))
+	for _, g := range latest {
+		result = append(result, g)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 
 // writeGpuProcMetrics exposes per-process GPU memory metrics.

@@ -113,7 +113,4 @@ func readSysStats() (SysStat, error) {
 	}, nil
 }
 
-// getGpuProcStats is not supported on Windows.
-func getGpuProcStats(ctx context.Context, every time.Duration, logger *logmon.Monitor) (chan []GpuProcStat, error) {
-	return nil, ErrNoGpuTool
-}
+

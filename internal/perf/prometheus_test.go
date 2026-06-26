@@ -29,6 +29,46 @@ func TestSanitizeLabel(t *testing.T) {
 	}
 }
 
+func TestLatestPerGPU_Empty(t *testing.T) {
+	result := latestPerGPU(nil)
+	assert.Empty(t, result)
+}
+
+func TestLatestPerGPU_Single(t *testing.T) {
+	now := time.Now()
+	stats := []GpuStat{{ID: 0, Name: "gpu0", Timestamp: now}}
+	result := latestPerGPU(stats)
+	require.Len(t, result, 1)
+	assert.Equal(t, "gpu0", result[0].Name)
+}
+
+func TestLatestPerGPU_PicksLatest(t *testing.T) {
+	earlier := time.Now().Add(-time.Second)
+	later := time.Now()
+	stats := []GpuStat{
+		{ID: 0, Name: "old", TempC: 50, Timestamp: earlier},
+		{ID: 0, Name: "new", TempC: 70, Timestamp: later},
+	}
+	result := latestPerGPU(stats)
+	require.Len(t, result, 1)
+	assert.Equal(t, "new", result[0].Name)
+	assert.Equal(t, 70, result[0].TempC)
+}
+
+func TestLatestPerGPU_MultipleGPUsSortedByID(t *testing.T) {
+	now := time.Now()
+	stats := []GpuStat{
+		{ID: 2, Name: "gpu2", Timestamp: now},
+		{ID: 0, Name: "gpu0", Timestamp: now},
+		{ID: 1, Name: "gpu1", Timestamp: now},
+	}
+	result := latestPerGPU(stats)
+	require.Len(t, result, 3)
+	assert.Equal(t, 0, result[0].ID)
+	assert.Equal(t, 1, result[1].ID)
+	assert.Equal(t, 2, result[2].ID)
+}
+
 func TestWriteSysMetrics(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s := SysStat{
@@ -205,4 +245,21 @@ func TestMetricsHandler_WithGpuStats(t *testing.T) {
 	body := rec.Body.String()
 	assert.Contains(t, body, "llamaswap_gpu_temperature_celsius")
 	assert.Contains(t, body, `name="TestGPU"`)
+}
+
+func TestMetricsHandler_WithGpuStatsFromSeparateSnapshots(t *testing.T) {
+	m, err := New(config.PerformanceConfig{}, newTestLogger())
+	require.NoError(t, err)
+
+	now := time.Now()
+	m.gpuRing.Push([]GpuStat{{ID: 0, Name: "GPU0", UUID: "uuid-0", TempC: 65, Timestamp: now}})
+	m.gpuRing.Push([]GpuStat{{ID: 1, Name: "GPU1", UUID: "uuid-1", TempC: 70, Timestamp: now.Add(time.Millisecond)}})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	m.MetricsHandler()(rec, req)
+
+	body := rec.Body.String()
+	assert.Contains(t, body, `llamaswap_gpu_temperature_celsius{id="0",name="GPU0",uuid="uuid-0"} 65`)
+	assert.Contains(t, body, `llamaswap_gpu_temperature_celsius{id="1",name="GPU1",uuid="uuid-1"} 70`)
 }
