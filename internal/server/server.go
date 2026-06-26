@@ -28,10 +28,11 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf     *perf.Monitor
-	inflight *inflightCounter
-	metrics  *metricsMonitor
-	build    BuildInfo
+	perf      *perf.Monitor
+	inflight  *inflightCounter
+	metrics   *metricsMonitor
+	build     BuildInfo
+	vramCache dockerPIDCache
 
 	local router.LocalRouter
 	peer  router.Router

@@ -17,18 +17,19 @@ var (
 )
 
 type Monitor struct {
-	mutex   sync.RWMutex
-	log     *logmon.Monitor
-	conf    config.PerformanceConfig
-	sysRing      ring.Buffer[SysStat]
-	gpuRing      ring.Buffer[[]GpuStat]
-	procRing     ring.Buffer[[]GpuProcStat]
+	mutex    sync.RWMutex
+	log      *logmon.Monitor
+	conf     config.PerformanceConfig
+	sysRing  ring.Buffer[SysStat]
+	gpuRing  ring.Buffer[[]GpuStat]
+	procRing ring.Buffer[[]GpuProcStat]
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
 
-	sysListeners map[chan SysStat]struct{}
-	gpuListeners map[chan []GpuStat]struct{}
+	sysListeners  map[chan SysStat]struct{}
+	gpuListeners  map[chan []GpuStat]struct{}
+	procListeners map[chan []GpuProcStat]struct{}
 }
 
 func ringCapacity(c config.PerformanceConfig) int {
@@ -51,13 +52,14 @@ func New(c config.PerformanceConfig, logger *logmon.Monitor) (*Monitor, error) {
 
 	capacity := ringCapacity(c)
 	return &Monitor{
-		conf:         c,
-		log:          logger,
-		sysRing:      ring.NewBuffer[SysStat](capacity),
-		gpuRing:      ring.NewBuffer[[]GpuStat](capacity),
-		procRing:     ring.NewBuffer[[]GpuProcStat](capacity),
-		sysListeners: make(map[chan SysStat]struct{}),
-		gpuListeners: make(map[chan []GpuStat]struct{}),
+		conf:          c,
+		log:           logger,
+		sysRing:       ring.NewBuffer[SysStat](capacity),
+		gpuRing:       ring.NewBuffer[[]GpuStat](capacity),
+		procRing:      ring.NewBuffer[[]GpuProcStat](capacity),
+		sysListeners:  make(map[chan SysStat]struct{}),
+		gpuListeners:  make(map[chan []GpuStat]struct{}),
+		procListeners: make(map[chan []GpuProcStat]struct{}),
 	}, nil
 }
 
@@ -112,6 +114,22 @@ func (m *Monitor) Subscribe() (chan SysStat, chan []GpuStat, func()) {
 	}
 
 	return sysChan, gpuChan, unsub
+}
+
+// SubscribeProcesses returns a channel receiving per-process GPU snapshots.
+func (m *Monitor) SubscribeProcesses() (chan []GpuProcStat, func()) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	procChan := make(chan []GpuProcStat, 1)
+	m.procListeners[procChan] = struct{}{}
+
+	unsub := func() {
+		m.mutex.Lock()
+		defer m.mutex.Unlock()
+		delete(m.procListeners, procChan)
+	}
+
+	return procChan, unsub
 }
 
 func (m *Monitor) Start() {
@@ -249,6 +267,19 @@ func (m *Monitor) LatestProcesses() []GpuProcStat {
 		return nil
 	}
 	return latest
+}
+
+// RecordProcesses stores and publishes one per-process GPU snapshot.
+func (m *Monitor) RecordProcesses(procs []GpuProcStat) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.procRing.Push(procs)
+	for l := range m.procListeners {
+		select {
+		case l <- procs:
+		default:
+		}
+	}
 }
 
 func ReadSysStats() (SysStat, error) {
