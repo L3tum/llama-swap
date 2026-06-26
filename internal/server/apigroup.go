@@ -35,12 +35,9 @@ type apiModel struct {
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningModels()
 
-	// Build PID -> VRAM map from latest process stats (O(1) vs O(N) with CurrentProcesses).
-	vramByPID := make(map[int]int)
+	var procStats []perf.GpuProcStat
 	if s.perf != nil {
-		for _, p := range s.perf.LatestProcesses() {
-			vramByPID[p.PID] = p.MemUsedMB
-		}
+		procStats = s.perf.LatestProcesses()
 	}
 
 	ids := make([]string, 0, len(s.cfg.Models))
@@ -64,11 +61,10 @@ func (s *Server) modelStatus() []apiModel {
 			Unlisted:    mc.Unlisted,
 			Aliases:     mc.Aliases,
 		}
-		// Correlate VRAM for running models.
+		// Correlate VRAM for running models. Match the tracked process PID and
+		// descendants so shell wrappers and named docker containers are included.
 		if proc := s.local.GetProcess(id); proc != nil {
-			if pid := proc.Pid(); pid > 0 {
-				m.VramMB = vramByPID[pid]
-			}
+			m.VramMB = modelProcessVramMB(mc, proc.Pid(), procStats)
 		}
 		models = append(models, m)
 	}
@@ -309,6 +305,13 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var procUpdates chan []perf.GpuProcStat
+	if s.perf != nil {
+		var unsubProc func()
+		procUpdates, unsubProc = s.perf.SubscribeProcesses()
+		defer unsubProc()
+	}
+
 	defer event.On(func(e shared.ProcessStateChangeEvent) { sendModels() })()
 	defer event.On(func(e shared.ConfigFileChangedEvent) { sendModels() })()
 	defer s.proxylog.OnLogData(func(data []byte) { sendLogData("proxy", data) })()
@@ -333,6 +336,8 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-s.shutdownCtx.Done():
 			return
+		case <-procUpdates:
+			sendModels()
 		case msg := <-sendBuffer:
 			data, err := json.Marshal(msg)
 			if err != nil {

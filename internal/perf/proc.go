@@ -105,9 +105,14 @@ func (m *Monitor) startProcPolling(ctx context.Context, every time.Duration) {
 				procs := CollectGpuProcs()
 				m.mutex.Lock()
 				m.procRing.Push(procs)
+				for l := range m.procListeners {
+					select {
+					case l <- procs:
+					default:
+					}
+				}
 				m.mutex.Unlock()
 			}
 		}
 	}()
 }
-

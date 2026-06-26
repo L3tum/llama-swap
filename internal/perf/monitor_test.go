@@ -107,6 +107,23 @@ func TestSubscribe_MultipleSubscriptions(t *testing.T) {
 	m.mutex.RUnlock()
 }
 
+func TestSubscribeProcesses_UnsubscribeRemovesListener(t *testing.T) {
+	m, err := New(config.PerformanceConfig{}, newTestLogger())
+	require.NoError(t, err)
+
+	_, unsub := m.SubscribeProcesses()
+
+	m.mutex.RLock()
+	assert.Len(t, m.procListeners, 1)
+	m.mutex.RUnlock()
+
+	unsub()
+
+	m.mutex.RLock()
+	assert.Len(t, m.procListeners, 0)
+	m.mutex.RUnlock()
+}
+
 func TestCurrent_EmptyByDefault(t *testing.T) {
 	m, err := New(config.PerformanceConfig{}, newTestLogger())
 	require.NoError(t, err)
