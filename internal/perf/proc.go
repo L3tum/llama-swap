@@ -49,7 +49,9 @@ func parseNvidiaSmiComputeApps(output string) []GpuProcStat {
 			continue
 		}
 
-		fields, err := csv.NewReader(strings.NewReader(line)).Read()
+		reader := csv.NewReader(strings.NewReader(line))
+		reader.TrimLeadingSpace = true
+		fields, err := reader.Read()
 		if err != nil || len(fields) < 3 {
 			continue
 		}
