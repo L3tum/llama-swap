@@ -25,12 +25,23 @@ type apiModel struct {
 	Unlisted    bool     `json:"unlisted"`
 	PeerID      string   `json:"peerID"`
 	Aliases     []string `json:"aliases,omitempty"`
+	VramMB      int      `json:"vram_mb,omitempty"` // VRAM used by this model's process (0 if stopped/unknown)
 }
 
 // modelStatus returns every configured model joined with its current process
 // state (defaulting to "stopped"), followed by peer models.
+// For running models, VRAM usage is correlated from the performance monitor's
+// per-process GPU stats using the process PID.
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningModels()
+
+	// Build PID -> VRAM map from latest process stats (O(1) vs O(N) with CurrentProcesses).
+	vramByPID := make(map[int]int)
+	if s.perf != nil {
+		for _, p := range s.perf.LatestProcesses() {
+			vramByPID[p.PID] = p.MemUsedMB
+		}
+	}
 
 	ids := make([]string, 0, len(s.cfg.Models))
 	for id := range s.cfg.Models {
@@ -45,14 +56,21 @@ func (s *Server) modelStatus() []apiModel {
 		if st, ok := running[id]; ok {
 			state = string(st)
 		}
-		models = append(models, apiModel{
+		m := apiModel{
 			Id:          id,
 			Name:        mc.Name,
 			Description: mc.Description,
 			State:       state,
 			Unlisted:    mc.Unlisted,
 			Aliases:     mc.Aliases,
-		})
+		}
+		// Correlate VRAM for running models.
+		if proc := s.local.GetProcess(id); proc != nil {
+			if pid := proc.Pid(); pid > 0 {
+				m.VramMB = vramByPID[pid]
+			}
+		}
+		models = append(models, m)
 	}
 
 	for peerID, peer := range s.cfg.Peers {
@@ -145,6 +163,10 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sysStats, gpuStats := s.perf.Current()
+	// Per-process GPU stats are a latest snapshot (not time series data). Empty
+	// snapshots are returned so clients can clear stale process rows when GPU
+	// processes exit.
+	procStats := s.perf.LatestProcesses()
 
 	if afterStr := r.URL.Query().Get("after"); afterStr != "" {
 		after, err := time.Parse(time.RFC3339, afterStr)
@@ -171,8 +193,9 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"sys_stats": sysStats,
-		"gpu_stats": gpuStats,
+		"sys_stats":      sysStats,
+		"gpu_stats":      gpuStats,
+		"gpu_proc_stats": procStats,
 	})
 }
 

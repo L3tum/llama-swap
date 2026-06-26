@@ -582,3 +582,4 @@ func readSysStats() (SysStat, error) {
 		NetIO:          netIO,
 	}, nil
 }
+

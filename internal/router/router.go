@@ -71,6 +71,10 @@ type LocalRouter interface {
 	// modelID must be a real (non-alias) config key. Returns false when the
 	// model is not known to this router.
 	ProcessLogger(modelID string) (*logmon.Monitor, bool)
+
+	// GetProcess returns the process handle for the named model, or nil
+	// when the model is not known to this router.
+	GetProcess(modelID string) process.Process
 }
 
 // FetchContext will attempt to get the model id from the context then

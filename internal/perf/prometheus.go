@@ -13,15 +13,22 @@ const mbToBytes = int64(1024 * 1024)
 // with the most recent system and GPU stats.
 func (m *Monitor) MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		sysStats, gpuStats := m.Current()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
-		if len(sysStats) > 0 {
-			writeSysMetrics(w, sysStats[len(sysStats)-1])
+		sysStat, _ := m.Latest()
+		if !sysStat.Timestamp.IsZero() {
+			writeSysMetrics(w, sysStat)
 		}
 
+		_, gpuStats := m.Current()
 		if len(gpuStats) > 0 {
 			writeGpuMetrics(w, latestPerGPU(gpuStats))
+		}
+
+		// ponytail: process metrics exposed when nvidia-smi reports compute contexts.
+		procStats := m.LatestProcesses()
+		if len(procStats) > 0 {
+			writeGpuProcMetrics(w, procStats)
 		}
 	}
 }
@@ -115,12 +122,28 @@ func latestPerGPU(stats []GpuStat) []GpuStat {
 			latest[g.ID] = g
 		}
 	}
+
 	result := make([]GpuStat, 0, len(latest))
 	for _, g := range latest {
 		result = append(result, g)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
+}
+
+// writeGpuProcMetrics exposes per-process GPU memory metrics.
+// Each PID appears once with total memory across all GPUs.
+func writeGpuProcMetrics(w http.ResponseWriter, procs []GpuProcStat) {
+	if len(procs) == 0 {
+		return
+	}
+
+	fmt.Fprintf(w, "# HELP llamaswap_gpu_process_memory_bytes GPU memory used by process in bytes\n")
+	fmt.Fprintf(w, "# TYPE llamaswap_gpu_process_memory_bytes gauge\n")
+	for _, p := range procs {
+		fmt.Fprintf(w, "llamaswap_gpu_process_memory_bytes{pid=\"%d\"} %d\n",
+			p.PID, int64(p.MemUsedMB)*mbToBytes)
+	}
 }
 
 // sanitizeLabel escapes characters that are invalid in Prometheus label values.

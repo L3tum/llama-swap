@@ -168,6 +168,14 @@
               {#if model.aliases && model.aliases.length > 0}
                 <p class="text-xs text-txtsecondary">Aliases: {model.aliases.join(", ")}</p>
               {/if}
+              {#if model.vram_mb && model.vram_mb > 0}
+                <p class="text-xs text-txtsecondary">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-3 h-3 inline -mt-0.5">
+                    <path d="M2 4.5A2.5 2.5 0 0 1 4.5 2h11A2.5 2.5 0 0 1 18 4.5v11a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 2 15.5v-11ZM4.5 4a.5.5 0 0 0-.5.5v11a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5v-11a.5.5 0 0 0-.5-.5h-11Z" />
+                  </svg>
+                  {Math.round(model.vram_mb / 1024).toLocaleString()} GB VRAM
+                </p>
+              {/if}
             </td>
             <td class="w-12">
               {#if model.state === "stopped"}

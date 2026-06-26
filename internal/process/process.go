@@ -46,4 +46,8 @@ type Process interface {
 
 	// Logger returns the monitor that captures this process's stdout/stderr.
 	Logger() *logmon.Monitor
+
+	// Pid returns the OS process ID of the running upstream, or 0 if
+	// the process is not currently running.
+	Pid() int
 }

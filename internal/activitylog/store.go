@@ -192,6 +192,11 @@ func (s *Store) DeleteOldest(keep int) (int, error) {
 		keep = 0
 	}
 
+	// Keep=0 means delete everything.
+	if keep == 0 {
+		return s.DeleteAll()
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -206,11 +211,15 @@ func (s *Store) DeleteOldest(keep int) (int, error) {
 		return 0, nil
 	}
 
-	result, err := s.db.Exec(`
-		DELETE FROM activity
-		WHERE id NOT IN (
-			SELECT id FROM activity ORDER BY id DESC LIMIT ?
-		)`, keep)
+	// Find the cutoff ID: the oldest entry we want to keep.
+	var cutoffID int
+	if err := s.db.QueryRow(
+		"SELECT id FROM activity ORDER BY id DESC LIMIT 1 OFFSET ?", keep,
+	).Scan(&cutoffID); err != nil {
+		return 0, fmt.Errorf("find cutoff ID: %w", err)
+	}
+
+	result, err := s.db.Exec("DELETE FROM activity WHERE id <= ?", cutoffID)
 	if err != nil {
 		return 0, fmt.Errorf("delete oldest activity entries: %w", err)
 	}

@@ -10,6 +10,7 @@ export interface Model {
   unlisted: boolean;
   peerID: string;
   aliases?: string[];
+  vram_mb?: number; // VRAM used by this model's process (0 or undefined if stopped)
 }
 
 export interface TokenMetrics {
@@ -96,9 +97,17 @@ export interface GpuStat {
   power_draw_w: number;
 }
 
+export interface GpuProcStat {
+  timestamp: string;
+  pid: number;
+  mem_used_mb: number;
+  process_name: string;
+}
+
 export interface PerformanceResponse {
   sys_stats: SysStat[];
   gpu_stats: GpuStat[];
+  gpu_proc_stats?: GpuProcStat[];
 }
 
 export interface APIEventEnvelope {

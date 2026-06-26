@@ -246,3 +246,20 @@ func TestMetricsHandler_WithGpuStats(t *testing.T) {
 	assert.Contains(t, body, "llamaswap_gpu_temperature_celsius")
 	assert.Contains(t, body, `name="TestGPU"`)
 }
+
+func TestMetricsHandler_WithGpuStatsFromSeparateSnapshots(t *testing.T) {
+	m, err := New(config.PerformanceConfig{}, newTestLogger())
+	require.NoError(t, err)
+
+	now := time.Now()
+	m.gpuRing.Push([]GpuStat{{ID: 0, Name: "GPU0", UUID: "uuid-0", TempC: 65, Timestamp: now}})
+	m.gpuRing.Push([]GpuStat{{ID: 1, Name: "GPU1", UUID: "uuid-1", TempC: 70, Timestamp: now.Add(time.Millisecond)}})
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	m.MetricsHandler()(rec, req)
+
+	body := rec.Body.String()
+	assert.Contains(t, body, `llamaswap_gpu_temperature_celsius{id="0",name="GPU0",uuid="uuid-0"} 65`)
+	assert.Contains(t, body, `llamaswap_gpu_temperature_celsius{id="1",name="GPU1",uuid="uuid-1"} 70`)
+}
