@@ -121,6 +121,18 @@ $ docker run -it --rm --runtime nvidia -p 9292:8080 \
  ghcr.io/mostlygeek/llama-swap:unified-cuda
 ```
 
+> [!IMPORTANT]
+> **VRAM monitoring** — The VRAM-per-model feature requires llama-swap's container to see the host's process tree. Add `--pid=host` to the `docker run` command:
+>
+> ```shell
+> $ docker run -it --rm --pid=host --runtime nvidia -p 9292:8080 \
+>  -v /path/to/models:/models \
+>  -v /path/to/custom/config.yaml:/etc/llama-swap/config/config.yaml \
+>  ghcr.io/mostlygeek/llama-swap:unified-cuda
+> ```
+>
+> Without `--pid=host`, `nvidia-smi` inside the container can only see processes within the llama-swap container (none), so VRAM usage will show as 0 for all models. Also ensure model commands use `docker run --name <name>` so llama-swap can map the process tree.
+
 #### Legacy container
 
 ```shell
@@ -132,6 +144,9 @@ $ docker run -it --rm --runtime nvidia -p 9292:8080 \
  -v /path/to/custom/config.yaml:/app/config.yaml \
  ghcr.io/mostlygeek/llama-swap:cuda
 ```
+
+> [!IMPORTANT]
+> **VRAM monitoring** — See the note above about `--pid=host`. Without it, VRAM usage shows as 0 for all models.
 
 <details>
 <summary>
