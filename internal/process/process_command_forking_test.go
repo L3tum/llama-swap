@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -310,23 +312,21 @@ func TestProcessCommand_StopReapsForkedGrandchild(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 
-	// After Stop the grandchild must be gone. Signal 0 probes liveness without
-	// actually sending a signal; give it a brief window to exit after the
-	// group SIGTERM.
-	proc, err := os.FindProcess(childPID)
-	if err != nil {
-		t.Fatalf("FindProcess: %v", err)
-	}
+	// After Stop the grandchild must be gone. A plain liveness probe (Signal 0
+	// / kill(pid, 0)) reports success for zombies, so under CI load a dead
+	// grandchild that is merely not-yet-reaped reads as "alive" and flakes this
+	// test. pidIsGone treats zombies as gone — the condition we actually care
+	// about is that the grandchild has stopped running.
 	gone := false
 	for i := 0; i < 100; i++ {
-		if err := proc.Signal(syscall.Signal(0)); err != nil {
+		if pidIsGone(childPID) {
 			gone = true
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !gone {
-		t.Errorf("grandchild PID %d still alive after Stop — process group was not reaped", childPID)
+		t.Errorf("grandchild PID %d still running after Stop — process group was not reaped", childPID)
 	}
 
 	select {
@@ -352,4 +352,61 @@ func killChildFromPidFile(pidFile string) {
 		return
 	}
 	_ = proc.Kill()
+}
+
+// pidIsGone reports whether pid has no running process: true when the PID no
+// longer exists or is a zombie (exited but not yet reaped). We can't rely on a
+// liveness probe (kill(pid, 0) / proc.Signal(0)) because it reports success for
+// zombies, which made the reaping test flaky under CI load when a dead
+// grandchild lingered unreaped for longer than the probe window.
+func pidIsGone(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return true
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		// We own our test grandchild, so an error here means it's gone.
+		return true
+	}
+	return pidIsZombie(pid)
+}
+
+// pidIsZombie reports whether pid is in the zombie state (Z), i.e. exited but
+// not yet reaped.
+func pidIsZombie(pid int) bool {
+	switch runtime.GOOS {
+	case "linux":
+		return linuxPIDStateZ(pid)
+	case "darwin":
+		return darwinPIDStateZ(pid)
+	default:
+		return false // unknown platform: conservatively treat as alive
+	}
+}
+
+// linuxPIDStateZ reads /proc/<pid>/stat and reports whether the process state
+// is Z. A missing /proc entry (already reaped) also counts as gone.
+func linuxPIDStateZ(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return true
+	}
+	// Format: "<pid> (<comm>) <state> ..." — comm may contain spaces and
+	// parentheses, so the state is the byte immediately after the last ')'.
+	s := string(data)
+	idx := strings.LastIndexByte(s, ')')
+	if idx < 0 || idx+2 >= len(s) {
+		return false
+	}
+	return s[idx+2] == 'Z'
+}
+
+// darwinPIDStateZ asks ps for the process state and reports whether it is Z.
+// A missing process (already reaped) also counts as gone.
+func darwinPIDStateZ(pid int) bool {
+	out, err := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
 }
