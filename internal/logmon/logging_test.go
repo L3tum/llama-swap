@@ -3,6 +3,7 @@ package logmon
 import (
 	"bytes"
 	"io"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -256,6 +257,96 @@ func TestLogMonitor_DropsWhenSubscriberBlocked(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// waitForGoroutines polls until the goroutine count returns to baseline,
+// fataling on timeout. A baseline captured after a quiescent moment is
+// stable enough: no background goroutines start/stop in this package.
+func waitForGoroutines(t *testing.T, baseline int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if n := runtime.NumGoroutine(); n <= baseline {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("goroutine leak: baseline %d, still %d after %v", baseline, runtime.NumGoroutine(), timeout)
+}
+
+// TestMonitor_Close_StopsBroadcastGoroutine is the regression test for the
+// per-model monitor leak: every Monitor's broadcast goroutine must exit when
+// the monitor is closed, so the monitor (ring buffer, dispatcher, channel)
+// becomes garbage-collectable.
+func TestMonitor_Close_StopsBroadcastGoroutine(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+
+	const n = 50
+	monitors := make([]*Monitor, n)
+	for i := range monitors {
+		monitors[i] = NewWriter(io.Discard)
+		monitors[i].Write([]byte("line\n"))
+	}
+	for _, m := range monitors {
+		m.Close()
+	}
+
+	waitForGoroutines(t, baseline, 5*time.Second)
+}
+
+// TestMonitor_Close_Idempotent verifies Close can be called any number of
+// times (router teardown paths do not track whether they already closed).
+func TestMonitor_Close_Idempotent(t *testing.T) {
+	lm := NewWriter(io.Discard)
+	lm.Write([]byte("hello"))
+	lm.Close()
+	lm.Close()
+	lm.Close()
+}
+
+// TestMonitor_WriteAfterClose verifies the late-write safety guarantee: a
+// stdout-drain write racing teardown must not panic (no send on a closed
+// channel), must not block, and must still reach the downstream writer and
+// the history buffer. Only live-broadcast delivery stops.
+func TestMonitor_WriteAfterClose(t *testing.T) {
+	var out bytes.Buffer
+	lm := NewWriter(&out)
+	lm.Close()
+
+	done := make(chan struct{})
+	go func() {
+		lm.Write([]byte("late"))
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked after Close")
+	}
+
+	if got := out.String(); got != "late" {
+		t.Errorf("downstream writer got %q, want %q", got, "late")
+	}
+	if got := string(lm.GetHistory()); got != "late" {
+		t.Errorf("history after Close got %q, want %q", got, "late")
+	}
+}
+
+// TestMonitor_Close_WithActiveSubscriber verifies the teardown contract with
+// a live subscriber: Close must not panic, and the subscriber goroutine must
+// terminate when its subscription is cancelled (Del), not when the bus is
+// closed — the cond.Broadcast in group.Del is what wakes the parked consumer.
+func TestMonitor_Close_WithActiveSubscriber(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+
+	lm := NewWriter(io.Discard)
+	cancel := lm.OnLogData(func(data []byte) {})
+	lm.Write([]byte("x"))
+	lm.Close()
+
+	// Cancel the subscriber; the parked consumer goroutine must exit.
+	cancel()
+	waitForGoroutines(t, baseline, 5*time.Second)
 }
 
 func BenchmarkLogMonitorWrite(b *testing.B) {

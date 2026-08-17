@@ -111,8 +111,13 @@ type Monitor struct {
 	// broadcastCh hands log data to a dedicated goroutine that owns the
 	// (backpressuring) event bus. Write performs a non-blocking send so that
 	// slow subscribers can never stall the upstream process's stdout drain.
-	broadcastCh chan []byte
-	dropped     atomic.Uint64
+	// It is never closed; Close signals the loop via broadcastDone instead,
+	// so a late Write from a dying stdout drain can never panic on a send to
+	// a closed channel (issue #875).
+	broadcastCh   chan []byte
+	dropped       atomic.Uint64
+	broadcastDone chan struct{}
+	closeOnce     sync.Once
 
 	level      Level
 	prefix     string
@@ -125,13 +130,14 @@ func New() *Monitor {
 
 func NewWriter(stdout io.Writer) *Monitor {
 	m := &Monitor{
-		eventbus:    event.NewDispatcherConfig(1000),
-		buffer:      nil,
-		stdout:      stdout,
-		broadcastCh: make(chan []byte, 1024),
-		level:       LevelInfo,
-		prefix:      "",
-		timeFormat:  "",
+		eventbus:      event.NewDispatcherConfig(1000),
+		buffer:        nil,
+		stdout:        stdout,
+		broadcastCh:   make(chan []byte, 1024),
+		broadcastDone: make(chan struct{}),
+		level:         LevelInfo,
+		prefix:        "",
+		timeFormat:    "",
 	}
 	go m.broadcastLoop()
 	return m
@@ -187,6 +193,23 @@ func (w *Monitor) Clear() {
 	w.bufferMu.Unlock()
 }
 
+// Close stops the broadcast goroutine, closes the event bus, and releases
+// the history buffer for GC. Idempotent; safe from any goroutine. After
+// Close, Write keeps forwarding to the downstream writer and updating the
+// history buffer, but no longer delivers data to subscribers. Write stays
+// non-blocking and panic-free after Close (broadcastCh is never closed), so
+// a late stdout-drain write from a dying upstream cannot panic the drain
+// goroutine (see #875). Note: OnLogData (Subscribe) after Close panics with
+// errClosed; existing subscriber goroutines terminate when their consumer is
+// removed (Del), not when the bus is closed.
+func (w *Monitor) Close() {
+	w.closeOnce.Do(func() {
+		close(w.broadcastDone)
+		w.eventbus.Close()
+		w.Clear()
+	})
+}
+
 func (w *Monitor) OnLogData(callback func(data []byte)) context.CancelFunc {
 	return event.Subscribe(w.eventbus, func(e DataEvent) {
 		callback(e.Data)
@@ -198,12 +221,20 @@ func (w *Monitor) OnLogData(callback func(data []byte)) context.CancelFunc {
 // delivering a message it flushes any pending dropped-byte count as an
 // in-stream marker so the UI shows where the gap is.
 func (w *Monitor) broadcastLoop() {
-	for msg := range w.broadcastCh {
-		if dropped := w.dropped.Swap(0); dropped > 0 {
-			notice := fmt.Appendf(nil, "\n— %d bytes dropped —\n", dropped)
-			event.Publish(w.eventbus, DataEvent{Data: notice})
+	for {
+		select {
+		case msg, ok := <-w.broadcastCh:
+			if !ok {
+				return
+			}
+			if dropped := w.dropped.Swap(0); dropped > 0 {
+				notice := fmt.Appendf(nil, "\n— %d bytes dropped —\n", dropped)
+				event.Publish(w.eventbus, DataEvent{Data: notice})
+			}
+			event.Publish(w.eventbus, DataEvent{Data: msg})
+		case <-w.broadcastDone:
+			return
 		}
-		event.Publish(w.eventbus, DataEvent{Data: msg})
 	}
 }
 

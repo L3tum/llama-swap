@@ -295,6 +295,13 @@ func (s *group[T]) Del(sub *consumer[T]) {
 			break
 		}
 	}
+
+	// Wake parked consumers so they observe the stop flag and exit. A
+	// consumer whose queue drained before the unsubscribe would otherwise
+	// stay parked in Wait() forever, leaking its goroutine. Broadcasting
+	// under the held cond.L is the standard sync.Cond pattern: waiters are
+	// woken holding the lock and re-check their stop flag in Listen.
+	s.cond.Broadcast()
 }
 
 // ------------------------------------- Debugging -------------------------------------

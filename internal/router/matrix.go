@@ -43,6 +43,13 @@ func NewMatrix(conf config.Config, proxylog, upstreamlog *logmon.Monitor) (*Matr
 		if err != nil {
 			base.shutdownFn()
 			base.procCancel()
+			// procLog was just allocated but never handed to a process: it is
+			// orphaned and must be closed here, or its broadcast goroutine
+			// leaks. The processes created so far are reclaimed via Close.
+			procLog.Close()
+			for _, p := range processes {
+				p.Close()
+			}
 			return nil, fmt.Errorf("creating process for %q: %w", mid, err)
 		}
 		processes[mid] = p

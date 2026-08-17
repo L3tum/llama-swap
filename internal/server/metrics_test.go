@@ -5,12 +5,14 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/store"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
 	"github.com/tidwall/gjson"
 )
@@ -349,5 +351,74 @@ func TestServer_MetricsMiddleware_UpstreamAudioCaptureSkipsRespBody(t *testing.T
 	}
 	if len(cap.RespHeaders) == 0 {
 		t.Error("RespHeaders not stored; want captureRespHeaders mask")
+	}
+}
+
+// TestQueueMetrics_PrunesFileBackedStore is the regression test for the
+// unbounded file-store growth: with store.path set, activity rows used to be
+// appended forever (the prune was gated on IsInMemory), so the full-table
+// scans behind /api/metrics/activity and /api/metrics/stats grew
+// monotonically. Retention must apply to file-backed stores too, keeping the
+// newest rows.
+func TestQueueMetrics_PrunesFileBackedStore(t *testing.T) {
+	st, err := store.New(filepath.Join(t.TempDir(), "test.sqlite"))
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	if st.IsInMemory() {
+		t.Fatal("test requires a file-backed store")
+	}
+
+	mm := newMetricsMonitor(logmon.NewWriter(io.Discard), 50, 0, st)
+
+	const n = 80
+	for i := 0; i < n; i++ {
+		if _, ok := mm.queueMetrics(ActivityLogEntry{Model: "m", Timestamp: time.Now()}); !ok {
+			t.Fatalf("queueMetrics failed at i=%d", i)
+		}
+	}
+
+	// Default sort is id DESC, so entries[0] is the newest row. With
+	// AUTOINCREMENT ids 1..80 and a cap of 50, prune deletes id <= 30 and
+	// keeps exactly 31..80.
+	entries := metricsEntries(t, mm)
+	if len(entries) != 50 {
+		t.Fatalf("file-backed store retained %d rows, want 50", len(entries))
+	}
+	if entries[0].ID != 80 {
+		t.Errorf("newest retained id = %d, want 80", entries[0].ID)
+	}
+	if entries[len(entries)-1].ID != 31 {
+		t.Errorf("oldest retained id = %d, want 31", entries[len(entries)-1].ID)
+	}
+}
+
+// TestQueueMetrics_FileStoreZeroMaxDisablesPruning documents the escape
+// hatch: metricsMaxInMemory of 0 keeps every row, for deployments that use
+// a file-backed store for history and accept the growth.
+func TestQueueMetrics_FileStoreZeroMaxDisablesPruning(t *testing.T) {
+	st, err := store.New(filepath.Join(t.TempDir(), "test.sqlite"))
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// maxMetrics 0 must survive newMetricsMonitor normalization (only
+	// negative values fall back to the 1000 default).
+	mm := newMetricsMonitor(logmon.NewWriter(io.Discard), 0, 0, st)
+	if mm.maxMetrics != 0 {
+		t.Fatalf("maxMetrics = %d, want 0 preserved for no-pruning", mm.maxMetrics)
+	}
+
+	const n = 20
+	for i := 0; i < n; i++ {
+		if _, ok := mm.queueMetrics(ActivityLogEntry{Model: "m", Timestamp: time.Now()}); !ok {
+			t.Fatalf("queueMetrics failed at i=%d", i)
+		}
+	}
+
+	if got := len(metricsEntries(t, mm)); got != n {
+		t.Errorf("retained %d rows with maxMetrics=0, want %d (no pruning)", got, n)
 	}
 }

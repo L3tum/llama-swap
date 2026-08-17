@@ -5,6 +5,7 @@ package event
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -296,6 +297,39 @@ func TestBackpressure(t *testing.T) {
 	finalProcessed := atomic.LoadInt64(&processedCount)
 	assert.Equal(t, int64(eventsToPublish), finalProcessed)
 	t.Logf("Events processed: %d/%d", finalProcessed, eventsToPublish)
+}
+
+// TestDel_WakesParkedConsumer verifies that unsubscribing a consumer whose
+// queue has drained (so it is parked in cond.Wait) actually terminates the
+// consumer goroutine. Without the cond.Broadcast in group.Del, a consumer
+// parked on an idle bus would never wake to observe its stop flag and would
+// leak its goroutine — which would defeat Monitor reclamation (the consumer
+// holds a reference to the dispatcher and its queued events). This test
+// fails before the Del fix and passes after it.
+func TestDel_WakesParkedConsumer(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+
+	d := NewDispatcher()
+	unsub := Subscribe(d, func(ev MyEvent1) {
+		// Nothing — the consumer will drain (there is nothing to process)
+		// and park in cond.Wait.
+	})
+
+	// Give the consumer a moment to park. With no events published the
+	// queue is empty, so Listen has entered c.Wait().
+	time.Sleep(50 * time.Millisecond)
+
+	unsub()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if n := runtime.NumGoroutine(); n <= baseline {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	assert.LessOrEqual(t, runtime.NumGoroutine(), baseline,
+		"consumer goroutine leaked after unsubscribe while parked")
 }
 
 // ------------------------------------- Test Events -------------------------------------

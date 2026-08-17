@@ -326,6 +326,16 @@ func (b *baseRouter) handleShutdown(req shutdownReq) {
 	// this is a clean no-op kill rather than a forced teardown.
 	b.procCancel()
 
+	// Reclaim per-process resources. All Stop() calls above have returned, so
+	// child pipes are closed and no further writes to the per-model log
+	// monitors can occur; their broadcast goroutines and ring buffers would
+	// otherwise leak for the life of the process on every config reload.
+	for id, p := range b.processes {
+		if err := p.Close(); err != nil {
+			b.logger.Warnf("%s failed to close process %s: %v", b.name, id, err)
+		}
+	}
+
 	req.respond <- nil
 }
 

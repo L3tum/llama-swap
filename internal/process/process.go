@@ -70,4 +70,11 @@ type Process interface {
 
 	// Pid returns the OS process ID, or 0 when the process is not running.
 	Pid() int
+
+	// Close releases resources owned by the process: its per-model log
+	// monitor and HTTP transports. It is called exactly once at router
+	// teardown, after Stop. It does NOT close the shared proxy logger,
+	// which outlives individual processes. Safe to call on a process that
+	// never started; idempotent.
+	Close() error
 }

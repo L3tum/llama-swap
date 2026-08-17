@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -55,6 +57,64 @@ func TestGroup_NewGroup_DuplicateMembership(t *testing.T) {
 	if _, err := NewGroup(conf, log, log); err == nil {
 		t.Fatalf("expected error for duplicate membership")
 	}
+}
+
+// TestGroup_NewGroup_ErrorPath_ReleasesMonitors verifies that a failed
+// constructor does not leak the per-model log monitors (and their broadcast
+// goroutines) created before the error. Map iteration order is random, so a
+// goroutine-count assertion covers both orderings: the failing model hit
+// first (nothing to release) or last (earlier models' monitors + the
+// orphaned procLog must all be closed).
+func TestGroup_NewGroup_ErrorPath_ReleasesMonitors(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+
+	conf := config.Config{
+		Routing: groupRouting(map[string]config.GroupConfig{
+			"g1": {Swap: true, Members: []string{"a", "missing"}},
+		}),
+		Models: map[string]config.ModelConfig{
+			"a": {},
+		},
+	}
+	log := logmon.NewWriter(io.Discard)
+	if _, err := NewGroup(conf, log, log); err == nil {
+		t.Fatal("expected NewGroup to fail: member missing from Models")
+	}
+	// The error path deliberately does not close the shared proxy/upstream
+	// log (in production it is owned by the server and outlives NewGroup), so
+	// the test closes it itself; otherwise its broadcastLoop goroutine is the
+	// single +1 the leak check below would flag.
+	log.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	min := runtime.NumGoroutine()
+	for time.Now().Before(deadline) {
+		if n := runtime.NumGoroutine(); n < min {
+			min = n
+		}
+		if min <= baseline {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	t.Fatalf("goroutines leaked after failed NewGroup: baseline %d, min now %d\nllama-swap goroutines:\n%s",
+		baseline, min, leakedGoroutines(buf[:n]))
+}
+
+// leakedGoroutines filters a full goroutine stack dump down to goroutines
+// that reference this module, so a leak-check failure points at the culprit
+// instead of drowning in runtime goroutines.
+func leakedGoroutines(dump []byte) string {
+	var sb strings.Builder
+	for _, block := range strings.Split(string(dump), "\n\n") {
+		if strings.Contains(block, "llama-swap") {
+			sb.WriteString(block)
+			sb.WriteString("\n\n")
+		}
+	}
+	return sb.String()
 }
 
 func TestGroup_ServeHTTP_SwapStopsPrevious(t *testing.T) {

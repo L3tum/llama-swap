@@ -1,5 +1,7 @@
 healthCheckTimeout: 300
 logRequests: true
+# activity metrics are pruned to the newest N rows for both in-memory and
+# file-backed stores; 0 disables pruning
 metricsMaxInMemory: 1000
 
 models:

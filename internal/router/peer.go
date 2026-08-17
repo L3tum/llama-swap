@@ -34,6 +34,11 @@ type Peer struct {
 	logger *logmon.Monitor
 	peers  map[string]*peerRoute
 
+	// transports are the per-peer HTTP transports, kept so Shutdown can
+	// close them once all in-flight requests have drained. They remain
+	// wired into each reverse proxy; this slice is additive bookkeeping.
+	transports []*http.Transport
+
 	shutdownCtx  context.Context
 	shutdownFn   context.CancelFunc
 	shuttingDown atomic.Bool
@@ -48,6 +53,7 @@ func NewPeer(cfg config.Config, logger *logmon.Monitor) (*Peer, error) {
 	peers := cfg.Peers
 	modelMap := make(map[string]*peerRoute)
 	bareRoutes := make(map[string][]*peerRoute)
+	transports := make([]*http.Transport, 0, len(peers))
 
 	peerIDs := make([]string, 0, len(peers))
 	for peerID := range peers {
@@ -72,6 +78,7 @@ func NewPeer(cfg config.Config, logger *logmon.Monitor) (*Peer, error) {
 			MaxIdleConnsPerHost:   10,
 			IdleConnTimeout:       time.Duration(peer.Timeouts.IdleConn) * time.Second,
 		}
+		transports = append(transports, peerTransport)
 
 		reverseProxy := &httputil.ReverseProxy{
 			Transport: peerTransport,
@@ -132,6 +139,7 @@ func NewPeer(cfg config.Config, logger *logmon.Monitor) (*Peer, error) {
 		cfg:         cfg,
 		logger:      logger,
 		peers:       modelMap,
+		transports:  transports,
 		shutdownCtx: shutdownCtx,
 		shutdownFn:  shutdownFn,
 	}, nil
@@ -146,6 +154,8 @@ func (r *Peer) Shutdown(timeout time.Duration) error {
 	if !r.shuttingDown.CompareAndSwap(false, true) {
 		return fmt.Errorf("shutdown already in progress")
 	}
+
+	defer r.closeTransports()
 
 	if timeout == 0 {
 		r.shutdownFn()
@@ -166,6 +176,19 @@ func (r *Peer) Shutdown(timeout time.Duration) error {
 		r.shutdownFn()
 		r.inflight.Wait()
 		return fmt.Errorf("peer shutdown timed out after %v", timeout)
+	}
+}
+
+// closeTransports releases the per-peer HTTP transport connections after
+// every in-flight request has drained (inflight.Wait has returned in both
+// Shutdown branches), so no live proxied request can lose its upstream
+// connection mid-response. http.Transport has no hard Close; with no
+// in-flight requests remaining, CloseIdleConnections closes every idle
+// keep-alive socket the transport holds. Idempotent: the shuttingDown guard
+// ensures Shutdown runs once, and CloseIdleConnections is safe to repeat.
+func (r *Peer) closeTransports() {
+	for _, tr := range r.transports {
+		tr.CloseIdleConnections()
 	}
 }
 

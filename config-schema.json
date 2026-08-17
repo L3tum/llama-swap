@@ -213,7 +213,7 @@
         "metricsMaxInMemory": {
             "type": "integer",
             "default": 1000,
-            "description": "Maximum number of metrics to keep in memory. Controls how many metrics are stored before older ones are discarded."
+            "description": "Maximum number of activity metrics to retain (in memory or in the file-backed store); older rows are pruned as new ones are recorded. 0 disables pruning."
         },
         "captureBuffer": {
             "type": "integer",

@@ -1,6 +1,10 @@
 package router
 
 import (
+	"bufio"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -692,5 +696,94 @@ func TestNewPeer_CustomTimeouts(t *testing.T) {
 	}
 	if !transport.ForceAttemptHTTP2 {
 		t.Error("expected ForceAttemptHTTP2 to be true")
+	}
+}
+
+// TestPeer_Shutdown_ClosesTransports verifies that Shutdown releases the
+// per-peer HTTP transport's idle connections once all in-flight requests have
+// drained, so a config reload does not leak idle keep-alive sockets.
+// http.Transport has no hard Close; CloseIdleConnections is the release point,
+// and it only drops the socket once no requests are in flight — exactly the
+// state Shutdown establishes. The test observes the idle upstream connection
+// closing at the peer side.
+func TestPeer_Shutdown_ClosesTransports(t *testing.T) {
+	// Peer server: speaks HTTP/1.1 keep-alive and signals when the client
+	// closes an accepted connection.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	accepted := make(chan chan struct{}, 16)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			closed := make(chan struct{})
+			accepted <- closed
+			go func() {
+				defer close(closed)
+				br := bufio.NewReader(c)
+				if _, err := http.ReadRequest(br); err != nil {
+					return
+				}
+				fmt.Fprintf(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+				// Block until the client closes the (now idle) connection.
+				io.Copy(io.Discard, br)
+			}()
+		}
+	}()
+
+	proxyURL, _ := url.Parse("http://" + ln.Addr().String())
+	peers := config.PeerDictionaryConfig{
+		"peer1": config.PeerConfig{
+			Proxy:    "http://" + ln.Addr().String(),
+			ProxyURL: proxyURL,
+			Models:   []string{"test-model"},
+		},
+	}
+
+	pr, err := NewPeer(config.Config{Peers: peers}, testLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pr.transports) != 1 {
+		t.Fatalf("expected 1 transport, got %d", len(pr.transports))
+	}
+
+	// One proxied request: opens an upstream connection that returns to the
+	// transport's idle pool once the response is fully read.
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	*req = *req.WithContext(swaputil.SetContext(req.Context(), swaputil.ReqContextData{Model: "test-model", ModelID: "test-model"}))
+	pr.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Wait for the accepted (idle) upstream connection.
+	var connClosed <-chan struct{}
+	select {
+	case connClosed = <-accepted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("peer server did not accept a connection for the proxied request")
+	}
+
+	// The idle connection is still open before Shutdown (keep-alive holds it).
+	select {
+	case <-connClosed:
+		t.Fatal("upstream connection closed before Shutdown")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := pr.Shutdown(0); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	// CloseIdleConnections drops the idle socket; the peer server observes the
+	// client-side close as EOF.
+	select {
+	case <-connClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle upstream connection not closed after Shutdown")
 	}
 }

@@ -34,6 +34,12 @@ func groupRouting(groups map[string]config.GroupConfig) config.RoutingConfig {
 type fakeProcess struct {
 	id string
 
+	// logger is the per-process monitor, created once so Logger() does not
+	// leak a fresh broadcast goroutine on every call (the previous
+	// implementation allocated logmon.NewWriter per call, pinning a
+	// goroutine + dispatcher per call). Close releases it.
+	logger *logmon.Monitor
+
 	mu          sync.Mutex
 	state       process.ProcessState
 	readyCh     chan struct{}
@@ -68,6 +74,7 @@ type fakeProcess struct {
 
 	runCalls     atomic.Int32
 	stopCalls    atomic.Int32
+	closeCalls   atomic.Int32
 	serveCalls   atomic.Int32
 	stopTimeouts []time.Duration
 
@@ -87,6 +94,7 @@ func newFakeProcess(id string) *fakeProcess {
 	return &fakeProcess{
 		id:           id,
 		state:        process.StateStopped,
+		logger:       logmon.NewWriter(io.Discard),
 		readyCh:      make(chan struct{}),
 		stopCh:       make(chan struct{}),
 		runStarted:   make(chan struct{}),
@@ -272,9 +280,20 @@ func (f *fakeProcess) WaitReady(ctx context.Context) error {
 	}
 }
 
-func (f *fakeProcess) Logger() *logmon.Monitor { return logmon.NewWriter(io.Discard) }
+func (f *fakeProcess) Logger() *logmon.Monitor { return f.logger }
 
 func (f *fakeProcess) Pid() int { return 0 }
+
+// Close releases the fake's per-process monitor and records the call so
+// router teardown tests can assert reclamation happened. Idempotent:
+// Monitor.Close is guarded by sync.Once.
+func (f *fakeProcess) Close() error {
+	f.closeCalls.Add(1)
+	if f.logger != nil {
+		f.logger.Close()
+	}
+	return nil
+}
 
 func (f *fakeProcess) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	f.serveCalls.Add(1)

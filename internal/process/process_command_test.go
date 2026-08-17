@@ -812,3 +812,70 @@ func TestProcessCommand_ConcurrentRunStop(t *testing.T) {
 		}
 	}
 }
+
+// TestProcessCommand_Close_ReleasesMonitorAndTransport verifies that Close
+// tears down the per-model log monitor (its broadcast goroutine exits) and is
+// idempotent. The run loop keeps running: it is Stop/procCancel's job, not
+// Close's. The process is never started, so the transport close is a no-op on
+// a transport with no connections.
+func TestProcessCommand_Close_ReleasesMonitorAndTransport(t *testing.T) {
+	p := newProcessCommand(t, config.ModelConfig{
+		Proxy:              "http://127.0.0.1:1",
+		HealthCheckTimeout: 5,
+	})
+	t.Cleanup(func() { p.Stop(testStopTimeout) }) //nolint: errcheck
+	// Baseline taken after New: includes the run loop and the monitor's
+	// broadcast goroutine, both running.
+	baseline := runtime.NumGoroutine()
+
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+
+	// The monitor's broadcast goroutine must have exited (one fewer
+	// goroutine than at baseline); the run loop is still counted.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= baseline-1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("monitor broadcast goroutine did not exit after Close: baseline %d, now %d", baseline, runtime.NumGoroutine())
+}
+
+// TestProcessCommand_Close_DoesNotCloseProxyLogger guards against the single
+// easiest way to break the app: closing the shared proxy logger from a
+// per-process Close. The proxy logger is owned by the server and outlives
+// every process, so it must still accept writes after a per-model Close.
+func TestProcessCommand_Close_DoesNotCloseProxyLogger(t *testing.T) {
+	proxyLogger := logmon.NewWriter(io.Discard)
+	processLogger := logmon.NewWriter(io.Discard)
+	p, err := New(context.Background(), t.Name(), config.ModelConfig{
+		Proxy:              "http://127.0.0.1:1",
+		HealthCheckTimeout: 5,
+	}, processLogger, proxyLogger)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { p.Stop(testStopTimeout) }) //nolint: errcheck
+
+	p.Close() //nolint: errcheck
+
+	done := make(chan struct{})
+	go func() {
+		proxyLogger.Write([]byte("still alive\n")) //nolint: errcheck
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxyLogger write blocked after Close")
+	}
+	if got := string(proxyLogger.GetHistory()); got != "still alive\n" {
+		t.Errorf("proxyLogger history got %q, want %q", got, "still alive\n")
+	}
+}
