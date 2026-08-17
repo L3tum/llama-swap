@@ -46,7 +46,12 @@ type metricsMonitor struct {
 }
 
 func newMetricsMonitor(logger *logmon.Monitor, maxMetrics int, captureBufferMB int, st store.Store) *metricsMonitor {
-	if maxMetrics <= 0 {
+	// A negative maxMetrics is invalid (config validation rejects it), so the
+	// default only applies to values that were never set. Zero is meaningful:
+	// it disables pruning (Prune no-ops on maxRows <= 0), giving
+	// deployments that keep a file-backed store for history an escape hatch
+	// from the retention cap.
+	if maxMetrics < 0 {
 		maxMetrics = 1000
 	}
 	mm := &metricsMonitor{
@@ -65,6 +70,12 @@ func newMetricsMonitor(logger *logmon.Monitor, maxMetrics int, captureBufferMB i
 // deliberately does not take the request context: record runs after the
 // handler returns, and an aborted request (canceled context) must still be
 // recorded — that is exactly when the error entry matters.
+//
+// Retention: after every insert the store is pruned to the newest
+// mp.maxMetrics rows, for in-memory and file-backed stores alike. Without
+// this, a long-running process with store.path set appends activity rows
+// forever and the full-table scans behind /api/metrics/activity and
+// /api/metrics/stats grow monotonically. maxMetrics of 0 disables pruning.
 func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) (ActivityLogEntry, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -74,10 +85,8 @@ func (mp *metricsMonitor) queueMetrics(metric ActivityLogEntry) (ActivityLogEntr
 		mp.warnf("failed to persist activity metric: %v", err)
 		return ActivityLogEntry{}, false
 	}
-	if mp.store.IsInMemory() {
-		if err := mp.store.Activity().Prune(ctx, mp.maxMetrics); err != nil {
-			mp.warnf("failed to prune activity metrics: %v", err)
-		}
+	if err := mp.store.Activity().Prune(ctx, mp.maxMetrics); err != nil {
+		mp.warnf("failed to prune activity metrics: %v", err)
 	}
 	return stored, true
 }

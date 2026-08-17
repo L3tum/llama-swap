@@ -113,6 +113,13 @@ type ProcessCommand struct {
 	processLogger *logmon.Monitor
 	proxyLogger   *logmon.Monitor
 
+	// transport is the shared HTTP transport for the reverse proxy, created
+	// once in New (its configuration depends only on the immutable model
+	// timeout settings) and closed in Close. doStart reuses it across
+	// restarts; idle connections to a previous instance fail on use and are
+	// discarded, which is standard transport behavior.
+	transport *http.Transport
+
 	// waitDelay is assigned to cmd.WaitDelay when starting the upstream
 	// process. Defaults to cmdWaitDelay; tests override it to keep the
 	// pipe-close backstop from dominating their runtime.
@@ -154,6 +161,20 @@ func New(
 		parentCtx:     parentCtx,
 		processLogger: processLogger,
 		proxyLogger:   proxyLogger,
+		transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   time.Duration(conf.Timeouts.Connect) * time.Second,
+				KeepAlive: time.Duration(conf.Timeouts.KeepAlive) * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   time.Duration(conf.Timeouts.TLSHandshake) * time.Second,
+			ResponseHeaderTimeout: time.Duration(conf.Timeouts.ResponseHeader) * time.Second,
+			ExpectContinueTimeout: time.Duration(conf.Timeouts.ExpectContinue) * time.Second,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       time.Duration(conf.Timeouts.IdleConn) * time.Second,
+		},
 
 		startCh:     make(chan startReq),
 		stopCh:      make(chan stopReq),
@@ -167,6 +188,23 @@ func New(
 }
 
 func (p *ProcessCommand) Logger() *logmon.Monitor { return p.processLogger }
+
+// Close releases resources owned by this process: its per-model log monitor
+// and the reverse-proxy transport. It does NOT close proxyLogger, which is
+// shared with the server and other processes. Idempotent: Monitor.Close uses
+// sync.Once and http.Transport.CloseIdleConnections is safe on an unused or
+// already-closed transport. Close is only called after the process has been
+// stopped, so no active connections remain and CloseIdleConnections closes
+// every connection the transport holds.
+func (p *ProcessCommand) Close() error {
+	if p.processLogger != nil {
+		p.processLogger.Close()
+	}
+	if p.transport != nil {
+		p.transport.CloseIdleConnections()
+	}
+	return nil
+}
 
 // run is the single-writer goroutine that owns all mutable lifecycle state
 // (current ProcessState, the running *exec.Cmd, the active reverse-proxy
@@ -475,20 +513,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 	}
 
 	reverseProxy := httputil.NewSingleHostReverseProxy(proxyURL)
-	reverseProxy.Transport = &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   time.Duration(p.config.Timeouts.Connect) * time.Second,
-			KeepAlive: time.Duration(p.config.Timeouts.KeepAlive) * time.Second,
-		}).DialContext,
-		TLSHandshakeTimeout:   time.Duration(p.config.Timeouts.TLSHandshake) * time.Second,
-		ResponseHeaderTimeout: time.Duration(p.config.Timeouts.ResponseHeader) * time.Second,
-		ExpectContinueTimeout: time.Duration(p.config.Timeouts.ExpectContinue) * time.Second,
-		ForceAttemptHTTP2:     true,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   10,
-		IdleConnTimeout:       time.Duration(p.config.Timeouts.IdleConn) * time.Second,
-	}
+	reverseProxy.Transport = p.transport
 	reverseProxy.ErrorHandler = newProxyErrorHandler(p.id, p.proxyLogger)
 	reverseProxy.ModifyResponse = func(resp *http.Response) error {
 		// Upstreams such as llama-server set their own CORS headers, and

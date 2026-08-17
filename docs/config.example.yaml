@@ -52,14 +52,18 @@ logToStdout: "proxy"
 # - optional, default: in-memory sqlite database capped by metricsMaxInMemory
 # - path is a sqlite database file path
 # - file-backed sqlite keeps activity logs across restarts
+# - file-backed stores are pruned to the newest metricsMaxInMemory rows
+#   as new activity is recorded
 # store:
 #   path: /path/to/file.sqlite
 
-# metricsMaxInMemory: maximum number of metrics to keep in memory
+# metricsMaxInMemory: maximum number of activity metrics to retain
 # - optional, default: 1000
-# - controls how many metrics are stored in memory before older ones are discarded
-# - useful for limiting memory usage when processing large volumes of metrics
-# - when persistent sqlite storage is defined in store.path this has no effect
+# - caps how many rows are kept, for both in-memory and file-backed stores;
+#   older rows are pruned as new ones are recorded (the name is kept for
+#   backwards compatibility)
+# - 0 disables pruning, keeping every row (unbounded growth — use only if
+#   you accept the memory/query cost on long-running processes)
 metricsMaxInMemory: 1000
 
 # captureBuffer: how many MBs to allocate for storing request/response captures

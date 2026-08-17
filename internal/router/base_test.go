@@ -727,3 +727,29 @@ func TestBaseRouter_Shutdown_StopsAllProcesses(t *testing.T) {
 		t.Errorf("second Shutdown returned nil, want error")
 	}
 }
+
+// TestBaseRouter_Shutdown_ClosesProcesses is the regression test for the
+// per-model monitor leak: router teardown must reclaim each process's
+// resources (its log monitor + transports) via Close, after the graceful
+// Stop calls. Without this, every config reload leaked one monitor (and its
+// broadcast goroutine) per model for the rest of the process's life.
+func TestBaseRouter_Shutdown_ClosesProcesses(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	go a.Run(0)
+	pb := newFakeProcess("b")
+	pb.markReady()
+	go pb.Run(0)
+
+	b := newTestBase(t, map[string]process.Process{"a": a, "b": pb}, &stubPlanner{})
+
+	if err := b.Shutdown(time.Second); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if got := a.closeCalls.Load(); got != 1 {
+		t.Errorf("a.closeCalls=%d want 1", got)
+	}
+	if got := pb.closeCalls.Load(); got != 1 {
+		t.Errorf("b.closeCalls=%d want 1", got)
+	}
+}
