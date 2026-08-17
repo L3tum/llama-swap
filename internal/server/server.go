@@ -31,12 +31,13 @@ type Server struct {
 	proxylog    *logmon.Monitor
 	upstreamlog *logmon.Monitor
 
-	perf     *perf.Monitor
-	inflight *inflightTracker
-	metrics  *metricsMonitor
-	store    *store.Store
-	build    BuildInfo
-	hardware *hw.HardwareSnapshot
+	perf      *perf.Monitor
+	inflight  *inflightTracker
+	metrics   *metricsMonitor
+	store     *store.Store
+	build     BuildInfo
+	hardware  *hw.HardwareSnapshot
+	vramCache dockerPIDCache
 
 	profileMu     sync.RWMutex
 	activeProfile string

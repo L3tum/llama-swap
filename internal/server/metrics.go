@@ -467,6 +467,18 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 		tokensPerSecond = 1000 / meanInterTokenLatency.Float()
 	}
 
+	// If no timing data was found from any source, approximate from wall-clock
+	speedApprox := false
+	if tokensPerSecond < 0 && wallDurationMs > 0 && inputTokens > 0 {
+		if promptPerSecond < 0 {
+			promptPerSecond = float64(inputTokens) / (float64(wallDurationMs) / 1000.0)
+		}
+		if outputTokens > 0 {
+			tokensPerSecond = float64(outputTokens) / (float64(wallDurationMs) / 1000.0)
+		}
+		speedApprox = promptPerSecond > 0 || tokensPerSecond > 0
+	}
+
 	return ActivityLogEntry{
 		Timestamp: time.Now(),
 		Model:     modelID,
@@ -478,6 +490,7 @@ func buildMetrics(modelID string, start time.Time, inputTokens, outputTokens, ca
 			OutputTokens:    int(outputTokens),
 			PromptPerSecond: promptPerSecond,
 			TokensPerSecond: tokensPerSecond,
+			SpeedApprox:     speedApprox,
 		},
 		DurationMs: durationMs,
 	}

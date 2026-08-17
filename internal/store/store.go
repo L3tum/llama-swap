@@ -28,6 +28,7 @@ type TokenMetrics struct {
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
+	SpeedApprox     bool    `json:"speed_approx"`
 }
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs.
@@ -202,8 +203,8 @@ func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (Act
 		INSERT INTO activity (
 			ts_created, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
-			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			prompt_per_second, tokens_per_second, speed_approx, duration_ms, error_msg, metadata_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
 		entry.Model,
 		entry.ReqPath,
@@ -216,6 +217,7 @@ func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (Act
 		entry.Tokens.OutputTokens,
 		entry.Tokens.PromptPerSecond,
 		entry.Tokens.TokensPerSecond,
+		entry.Tokens.SpeedApprox,
 		entry.DurationMs,
 		entry.ErrorMsg,
 		metadataJSON,
@@ -245,7 +247,7 @@ func (s *Store) ListActivity(ctx context.Context, query ActivityQuery) (Activity
 		SELECT
 			id, ts_created, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
-			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
+			prompt_per_second, tokens_per_second, speed_approx, duration_ms, error_msg, metadata_json
 		FROM activity`+where+activityOrderBy(query)+`
 		LIMIT ? OFFSET ?`,
 		append(args, query.Limit, offset)...,
@@ -528,6 +530,7 @@ func scanActivity(scanner activityScanner) (ActivityLogEntry, error) {
 		&entry.Tokens.OutputTokens,
 		&entry.Tokens.PromptPerSecond,
 		&entry.Tokens.TokensPerSecond,
+		&entry.Tokens.SpeedApprox,
 		&entry.DurationMs,
 		&entry.ErrorMsg,
 		&metadataJSON,

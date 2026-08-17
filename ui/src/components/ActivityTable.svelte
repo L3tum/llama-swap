@@ -408,13 +408,19 @@
         id: "prompt_speed",
         accessorFn: (row) => row.tokens.prompt_per_second,
         header: "Prefill",
-        cell: ({ row }) => formatSpeed(row.original.tokens.prompt_per_second),
+        cell: ({ row }) => {
+          const approx = row.original.tokens.speed_approx;
+          return approx ? `${formatSpeed(row.original.tokens.prompt_per_second)}~` : formatSpeed(row.original.tokens.prompt_per_second);
+        },
       },
       {
         id: "gen_speed",
         accessorFn: (row) => row.tokens.tokens_per_second,
         header: "Decode",
-        cell: ({ row }) => formatSpeed(row.original.tokens.tokens_per_second),
+        cell: ({ row }) => {
+          const approx = row.original.tokens.speed_approx;
+          return approx ? `${formatSpeed(row.original.tokens.tokens_per_second)}~` : formatSpeed(row.original.tokens.tokens_per_second);
+        },
       },
       {
         id: "duration",

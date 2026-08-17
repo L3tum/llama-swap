@@ -89,6 +89,11 @@
     <span class="text-muted-foreground text-xs uppercase tracking-wide">
       {model.state}
     </span>
+    {#if model.vram_mb && model.vram_mb > 0}
+      <span class="text-muted-foreground text-xs tabular-nums" title="VRAM used">
+        {model.vram_mb >= 1024 ? (model.vram_mb / 1024).toFixed(1) + " GB" : model.vram_mb + " MB"}
+      </span>
+    {/if}
     {#if model.unlisted}
       <Tag class="px-1.5 text-[0.625rem] uppercase">unlisted</Tag>
     {/if}

@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { fetchPerformance } from "../stores/api";
   import { persistentStore } from "../stores/persistent";
-  import type { SysStat, GpuStat } from "../lib/types";
+  import type { SysStat, GpuStat, GpuProcStat } from "../lib/types";
   import PerformanceChart from "../components/PerformanceChart.svelte";
   import SegmentedControl from "../components/SegmentedControl.svelte";
   import * as Card from "$lib/components/ui/card/index.js";
@@ -46,6 +46,7 @@
   let selectedInterval = persistentStore("perf-refresh-interval", 0);
   let sysData = $state<SysStat[]>([]);
   let gpuData = $state<GpuStat[]>([]);
+  let gpuProcData = $state<GpuProcStat[]>([]);
   let refreshing = $state(false);
 
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -80,6 +81,7 @@
     if (resp) {
       sysData = resp.sys_stats ?? [];
       gpuData = resp.gpu_stats ?? [];
+      gpuProcData = resp.gpu_proc_stats ?? [];
     }
   }
 
@@ -94,6 +96,9 @@
       }
       if (newGpu.length > 0) {
         gpuData = [...gpuData, ...newGpu];
+      }
+      if (resp.gpu_proc_stats) {
+        gpuProcData = resp.gpu_proc_stats;
       }
     }
   }
@@ -302,6 +307,9 @@
   const filteredGpuStats = $derived(gpuData.filter((g) => new Date(g.timestamp).getTime() >= cutoffTime()));
 
   const hasGpuData = $derived(gpuData.length > 0);
+  const hasGpuProcData = $derived(gpuProcData.length > 0);
+
+  const gpuProcTotalVramMB = $derived(gpuProcData.reduce((sum, p) => sum + p.mem_used_mb, 0));
 
   const gpuLabels = $derived.by(() => {
     const seen = new Set<string>();
@@ -428,6 +436,35 @@
           yLabel="W"
         />
       </div>
+    {/if}
+
+    {#if hasGpuProcData}
+      <Card.Root>
+        <Card.Header>
+          <Card.Title>GPU Processes</Card.Title>
+          <span class="text-xs text-muted-foreground">{gpuProcData.length} process(es), {gpuProcTotalVramMB.toLocaleString()} MB total</span>
+        </Card.Header>
+        <Card.Content>
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b text-left text-muted-foreground">
+                <th class="pb-2 pr-4">PID</th>
+                <th class="pb-2 pr-4">Process Name</th>
+                <th class="pb-2 text-right">VRAM (MB)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each gpuProcData as proc}
+                <tr class="border-b border-border/50">
+                  <td class="py-1.5 pr-4 font-mono">{proc.pid}</td>
+                  <td class="py-1.5 pr-4">{proc.process_name}</td>
+                  <td class="py-1.5 text-right font-medium">{proc.mem_used_mb.toLocaleString()}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </Card.Content>
+      </Card.Root>
     {/if}
   </section>
 

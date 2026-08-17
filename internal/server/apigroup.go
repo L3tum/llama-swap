@@ -28,6 +28,7 @@ type apiModel struct {
 	Aliases       []string       `json:"aliases,omitempty"`
 	Capabilities  map[string]any `json:"capabilities,omitempty"`
 	ContextLength int            `json:"context_length,omitempty"`
+	VramMB        int            `json:"vram_mb,omitempty"`
 }
 
 type apiProfile struct {
@@ -99,6 +100,11 @@ func (s *Server) handleAPIActiveProfile(w http.ResponseWriter, r *http.Request) 
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningModels()
 
+	var procStats []perf.GpuProcStat
+	if s.perf != nil {
+		procStats = s.perf.LatestProcesses()
+	}
+
 	ids := make([]string, 0, len(s.cfg.Models))
 	for id := range s.cfg.Models {
 		ids = append(ids, id)
@@ -113,7 +119,7 @@ func (s *Server) modelStatus() []apiModel {
 			state = string(st)
 		}
 		_, capsMap, _, ctxLen := renderCapabilities(mc.Capabilities)
-		models = append(models, apiModel{
+		m := apiModel{
 			Id:            id,
 			Name:          mc.Name,
 			Description:   mc.Description,
@@ -122,7 +128,14 @@ func (s *Server) modelStatus() []apiModel {
 			Aliases:       mc.Aliases,
 			Capabilities:  capsMap,
 			ContextLength: ctxLen,
-		})
+		}
+		if proc, ok := running[id]; ok {
+			_ = proc
+			if p := s.local.GetProcess(id); p != nil {
+				m.VramMB = s.modelProcessVramMB(id, mc, p.Pid(), procStats)
+			}
+		}
+		models = append(models, m)
 	}
 
 	for peerID, peer := range s.cfg.Peers {
@@ -342,9 +355,10 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"enabled":   true,
-		"sys_stats": sysStats,
-		"gpu_stats": gpuStats,
+		"enabled":        true,
+		"sys_stats":      sysStats,
+		"gpu_stats":      gpuStats,
+		"gpu_proc_stats": s.perf.LatestProcesses(),
 	})
 }
 
@@ -498,6 +512,13 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 	defer event.On(func(e ActivityLogEvent) { sendActivity(e.Metrics.ID) })()
 	defer event.On(func(e swaputil.InFlightRequestsEvent) { sendInFlight(e) })()
 
+	var procUpdates chan []perf.GpuProcStat
+	var unsubProc func()
+	if s.perf != nil {
+		procUpdates, unsubProc = s.perf.SubscribeProcesses()
+		defer unsubProc()
+	}
+
 	// initial payload
 	sendLogData("proxy", s.proxylog.GetHistory())
 	sendLogData("upstream", s.upstreamlog.GetHistory())
@@ -519,6 +540,8 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(w, "event:message\ndata:%s\n\n", data)
 			flusher.Flush()
+		case <-procUpdates:
+			sendModels()
 		}
 	}
 }
