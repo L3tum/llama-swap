@@ -63,3 +63,61 @@ func TestBuffer_InsertionOrderPreservedAfterWrap(t *testing.T) {
 	}
 	assert.Equal(t, []int{5, 6, 7, 8}, b.Slice())
 }
+
+func TestBuffer_LatestEmpty(t *testing.T) {
+	b := NewBuffer[int](4)
+	v, ok := b.Latest()
+	assert.False(t, ok)
+	assert.Zero(t, v)
+}
+
+func TestBuffer_LatestSingleElement(t *testing.T) {
+	b := NewBuffer[int](4)
+	b.Push(42)
+	v, ok := b.Latest()
+	assert.True(t, ok)
+	assert.Equal(t, 42, v)
+}
+
+func TestBuffer_LatestMultipleElements(t *testing.T) {
+	b := NewBuffer[int](4)
+	b.Push(1)
+	b.Push(2)
+	b.Push(3)
+	v, ok := b.Latest()
+	assert.True(t, ok)
+	assert.Equal(t, 3, v)
+}
+
+func TestBuffer_LatestAfterWrap(t *testing.T) {
+	b := NewBuffer[int](3)
+	for i := 1; i <= 6; i++ {
+		b.Push(i)
+	}
+	// Buffer contains [4, 5, 6], latest should be 6
+	v, ok := b.Latest()
+	assert.True(t, ok)
+	assert.Equal(t, 6, v)
+}
+
+func TestBuffer_LatestCapacityOne(t *testing.T) {
+	b := NewBuffer[int](1)
+	b.Push(1)
+	b.Push(2)
+	b.Push(3)
+	v, ok := b.Latest()
+	assert.True(t, ok)
+	assert.Equal(t, 3, v)
+}
+
+func TestBuffer_LatestReturnsCopy(t *testing.T) {
+	type val struct{ N int }
+	b := NewBuffer[val](4)
+	b.Push(val{N: 1})
+	b.Push(val{N: 2})
+	v, ok := b.Latest()
+	assert.True(t, ok)
+	v.N = 99
+	v2, _ := b.Latest()
+	assert.Equal(t, 2, v2.N) // original unchanged
+}

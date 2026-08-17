@@ -37,6 +37,7 @@ type apiModel struct {
 	// UI counts from it rather than from ReadySince, so a browser clock that
 	// differs from the server's doesn't skew the uptime.
 	UptimeMs int64 `json:"uptimeMs,omitempty"`
+	VramMB   int   `json:"vram_mb,omitempty"`
 }
 
 type apiProfile struct {
@@ -108,6 +109,11 @@ func (s *Server) handleAPIActiveProfile(w http.ResponseWriter, r *http.Request) 
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningStatus()
 
+	var procStats []perf.GpuProcStat
+	if s.perf != nil {
+		procStats = s.perf.LatestProcesses()
+	}
+
 	ids := make([]string, 0, len(s.cfg.Models))
 	for id := range s.cfg.Models {
 		ids = append(ids, id)
@@ -134,7 +140,7 @@ func (s *Server) modelStatus() []apiModel {
 		// event callbacks that have no request of their own.
 		caps := s.resolveCapabilities(s.shutdownCtx, id, mc)
 		_, capsMap, _, ctxLen := renderCapabilities(caps)
-		models = append(models, apiModel{
+		m := apiModel{
 			Id:            id,
 			Name:          mc.Name,
 			Description:   mc.Description,
@@ -145,7 +151,14 @@ func (s *Server) modelStatus() []apiModel {
 			ContextLength: ctxLen,
 			ReadySince:    readySince,
 			UptimeMs:      uptimeMs,
-		})
+		}
+		if proc, ok := running[id]; ok {
+			_ = proc
+			if p := s.local.GetProcess(id); p != nil {
+				m.VramMB = s.modelProcessVramMB(id, mc, p.Pid(), procStats)
+			}
+		}
+		models = append(models, m)
 	}
 
 	for peerID, peer := range s.cfg.Peers {
@@ -366,9 +379,10 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"enabled":   true,
-		"sys_stats": sysStats,
-		"gpu_stats": gpuStats,
+		"enabled":        true,
+		"sys_stats":      sysStats,
+		"gpu_stats":      gpuStats,
+		"gpu_proc_stats": s.perf.LatestProcesses(),
 	})
 }
 
@@ -644,7 +658,33 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		sendProfile()
 		sendInFlight(s.inflight.Current())
 
-		return func() { cancelAll(unsubscribe) }
+		// GPU process VRAM updates (fork feature): refresh the model status
+		// whenever the perf monitor reports new per-process stats.
+		var procUpdates chan []perf.GpuProcStat
+		var unsubProc func()
+		if s.perf != nil {
+			procUpdates, unsubProc = s.perf.SubscribeProcesses()
+		}
+		if procUpdates != nil {
+			done := r.Context().Done()
+			go func() {
+				for {
+					select {
+					case <-procUpdates:
+						sendModels()
+					case <-done:
+						return
+					}
+				}
+			}()
+		}
+
+		return func() {
+			if unsubProc != nil {
+				unsubProc()
+			}
+			cancelAll(unsubscribe)
+		}
 	})
 }
 

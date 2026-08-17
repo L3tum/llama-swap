@@ -25,6 +25,26 @@ func (r *Buffer[T]) Push(v T) {
 	}
 }
 
+// Len returns the number of entries currently in the buffer.
+func (r *Buffer[T]) Len() int {
+	return r.size
+}
+
+// Cap returns the maximum capacity of the buffer.
+func (r *Buffer[T]) Cap() int {
+	return len(r.buf)
+}
+
+// Latest returns the most recently pushed entry, or the zero value if empty.
+func (r *Buffer[T]) Latest() (T, bool) {
+	if r.size == 0 {
+		var zero T
+		return zero, false
+	}
+	idx := (r.head + r.size - 1) % len(r.buf)
+	return r.buf[idx], true
+}
+
 // Slice returns all entries in insertion order as a new slice.
 func (r *Buffer[T]) Slice() []T {
 	if r.size == 0 {

@@ -18,6 +18,13 @@ type GpuStat struct {
 	PowerDrawW  float64 `json:"power_draw_w"`
 }
 
+type GpuProcStat struct {
+	Timestamp   time.Time `json:"timestamp"`
+	PID         int       `json:"pid"`
+	MemUsedMB   int       `json:"mem_used_mb"`
+	ProcessName string    `json:"process_name"`
+}
+
 type NetIOStat struct {
 	Name      string `json:"name"`
 	BytesRecv uint64 `json:"bytes_recv"`

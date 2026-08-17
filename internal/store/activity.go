@@ -15,6 +15,7 @@ type TokenMetrics struct {
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
+	SpeedApprox     bool    `json:"speed_approx"`
 }
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs.

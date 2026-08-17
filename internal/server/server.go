@@ -34,12 +34,13 @@ type Server struct {
 
 	logs *logmon.Group
 
-	perf     *perf.Monitor
-	inflight *inflightTracker
-	metrics  *metricsMonitor
-	store    store.Store
-	build    BuildInfo
-	hardware *hw.HardwareSnapshot
+	perf      *perf.Monitor
+	inflight  *inflightTracker
+	metrics   *metricsMonitor
+	store     store.Store
+	build     BuildInfo
+	hardware  *hw.HardwareSnapshot
+	vramCache dockerPIDCache
 
 	// reference is llama-swap's own embedded documentation, served to the
 	// Playground's agentic chat and to external MCP clients through /api/mcp.

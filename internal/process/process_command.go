@@ -118,6 +118,9 @@ type ProcessCommand struct {
 	// pipe-close backstop from dominating their runtime.
 	waitDelay time.Duration
 
+	// pid holds the OS process ID while the process is running; 0 when stopped.
+	pid atomic.Int32
+
 	startCh     chan startReq
 	stopCh      chan stopReq
 	waitReadyCh chan waitReadyReq
@@ -537,6 +540,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 		cmdCancel()
 		return startResult{err: fmt.Errorf("failed to start command '%s': %w", strings.Join(args, " "), err)}
 	}
+	p.pid.Store(int32(cmd.Process.Pid))
 
 	go func() {
 		waitErr := cmd.Wait()
@@ -556,6 +560,7 @@ func (p *ProcessCommand) doStart(startCtx context.Context, healthCheckTimeout ti
 			}
 		}
 		close(cmdDone)
+		p.pid.Store(0)
 	}()
 
 	abort := func(err error) startResult {
@@ -813,6 +818,10 @@ func (p *ProcessCommand) Stop(timeout time.Duration) error {
 		return fmt.Errorf("[%s] shutdown", p.id)
 	}
 	return <-req.respond
+}
+
+func (p *ProcessCommand) Pid() int {
+	return int(p.pid.Load())
 }
 
 func (p *ProcessCommand) State() ProcessState {

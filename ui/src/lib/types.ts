@@ -43,6 +43,7 @@ export interface Model {
   strategy?: string;
   targets?: string[];
   spillover?: number;
+  vram_mb?: number;
 }
 
 export interface Profile {
@@ -64,6 +65,7 @@ export interface TokenMetrics {
   output_tokens: number;
   prompt_per_second: number;
   tokens_per_second: number;
+  speed_approx?: boolean;
 }
 
 export interface ActivityLogEntry {
@@ -174,9 +176,17 @@ export interface GpuStat {
   power_draw_w: number;
 }
 
+export interface GpuProcStat {
+  timestamp: string;
+  pid: number;
+  mem_used_mb: number;
+  process_name: string;
+}
+
 export interface PerformanceResponse {
   sys_stats: SysStat[];
   gpu_stats: GpuStat[];
+  gpu_proc_stats?: GpuProcStat[];
 }
 
 export interface APIEventEnvelope {
