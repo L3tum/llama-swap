@@ -3,6 +3,7 @@ import {
   formatDuration,
   formatSpeed,
   formatFileSize,
+  formatVram,
   formatCapacity,
   formatRelativeTime,
   formatAbsoluteTime,
@@ -49,6 +50,24 @@ describe("formatFileSize", () => {
 
   it("formats megabytes", () => {
     expect(formatFileSize(5 * 1024 * 1024)).toBe("5.0 MB");
+  });
+});
+
+describe("formatVram", () => {
+  it("formats megabytes below 1 GB", () => {
+    expect(formatVram(850)).toBe("850 MB");
+    expect(formatVram(1)).toBe("1 MB");
+  });
+
+  it("formats gigabytes at and above 1 GB", () => {
+    expect(formatVram(1024)).toBe("1.0 GB");
+    expect(formatVram(12580)).toBe("12.3 GB");
+  });
+
+  it("returns an empty string for absent or invalid values", () => {
+    expect(formatVram(0)).toBe("");
+    expect(formatVram(Number.NaN)).toBe("");
+    expect(formatVram(Number.POSITIVE_INFINITY)).toBe("");
   });
 });
 

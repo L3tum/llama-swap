@@ -21,6 +21,7 @@ import {
   tailcatStatus,
   uiConfig,
 } from "./api";
+import { inflightHistory } from "./inflightActivity";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,6 +30,9 @@ afterEach(() => {
   profiles.set([]);
   activeProfile.set(null);
   tailcatStatus.set({ enabled: false, address: "", models: [] });
+  inFlightRequests.set(0);
+  inflightRequestEntries.set([]);
+  inflightHistory.set({});
 });
 
 describe("tailcat api", () => {
@@ -176,6 +180,35 @@ describe("api store event handling", () => {
     }));
     expect(get(inflightRequestEntries)).toEqual([]);
     expect(get(inFlightRequests)).toBe(0);
+  });
+
+  it("records per-model inflight history for activity sparklines", () => {
+    handleAPIEventMessage(JSON.stringify({
+      type: "inflight",
+      data: JSON.stringify({
+        operation: "upsert",
+        request: {
+          id: "9",
+          timestamp: "2026-07-03T00:00:00Z",
+          model: "m1",
+          req_path: "/v1/chat/completions",
+          method: "POST",
+          req_headers: {},
+          remote_ip: "203.0.113.9",
+          resp_headers: {},
+          resp_bytes: 0,
+          elapsed_ms: 10,
+        },
+      }),
+    }));
+    expect(get(inflightHistory).m1.map((p) => p.count)).toEqual([1]);
+
+    // Repeated upserts of the same request must not add points.
+    handleAPIEventMessage(JSON.stringify({
+      type: "inflight",
+      data: JSON.stringify({ operation: "remove", id: "9" }),
+    }));
+    expect(get(inflightHistory).m1.map((p) => p.count)).toEqual([1, 0]);
   });
 
   it("parses UI activity configuration", () => {

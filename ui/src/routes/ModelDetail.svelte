@@ -12,7 +12,7 @@
   import ModelLogsTab from "../components/model/ModelLogsTab.svelte";
   import ModelDetailsTab from "../components/model/ModelDetailsTab.svelte";
   import { modelServerPath } from "../lib/modelUtils";
-  import { formatAbsoluteTime, formatUptime } from "../lib/format";
+  import { formatAbsoluteTime, formatUptime, formatVram } from "../lib/format";
 
   let modelId = $derived($params?.id ?? "");
 
@@ -68,6 +68,11 @@
                 <CopyableId value={model.id} class="-ml-1 font-mono text-xs" />
               {/if}
               <span class="text-xs uppercase tracking-wide">{model.state}</span>
+              {#if model.vram_mb && model.vram_mb > 0}
+                <span class="text-muted-foreground text-xs tabular-nums" title="VRAM used">
+                  {formatVram(model.vram_mb)}
+                </span>
+              {/if}
               {#if isReady}
                 <span class="text-xs" title={readySince ? `Ready since ${formatAbsoluteTime(readySince)}` : undefined}>
                   up {uptime}

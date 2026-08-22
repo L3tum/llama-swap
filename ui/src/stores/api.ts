@@ -1,4 +1,4 @@
-import { writable, derived } from "svelte/store";
+import { writable, derived, get } from "svelte/store";
 import type {
   Model,
   ActivityPage,
@@ -18,6 +18,7 @@ import type {
 } from "../lib/types";
 import { appendActivityFilters, type ActivityFilters } from "../lib/activityFilters";
 import { connectionState } from "./theme";
+import { inflightCountsByModel, recordInflightCounts } from "./inflightActivity";
 
 // Stores
 export const models = writable<Model[]>([]);
@@ -149,32 +150,42 @@ export function handleAPIEventMessage(data: string): void {
         ...request,
         client_received_at_ms: performance.now(),
       });
-      inflightRequestEntries.update((current) => {
-        let requests = current;
-        switch (stats.operation) {
-          case "snapshot":
-            requests = (stats.requests ?? []).map(withReceiptTime);
-            break;
-          case "upsert": {
-            if (!stats.request) break;
-            const received = withReceiptTime(stats.request);
-            const index = current.findIndex((request) => request.id === received.id);
-            requests = index === -1
-              ? [...current, received]
-              : current.map((request, i) => i === index ? received : request);
-            break;
-          }
-          case "remove":
-            requests = current.filter((request) => request.id !== stats.id);
-            break;
+      const current = get(inflightRequestEntries);
+      let requests = current;
+      let removedModel: string | null = null;
+      switch (stats.operation) {
+        case "snapshot":
+          requests = (stats.requests ?? []).map(withReceiptTime);
+          break;
+        case "upsert": {
+          if (!stats.request) break;
+          const received = withReceiptTime(stats.request);
+          const index = current.findIndex((request) => request.id === received.id);
+          requests = index === -1
+            ? [...current, received]
+            : current.map((request, i) => i === index ? received : request);
+          break;
         }
-        requests.sort((a, b) => {
-          const byTime = Date.parse(a.timestamp) - Date.parse(b.timestamp);
-          return byTime || a.id.localeCompare(b.id, undefined, { numeric: true });
-        });
-        inFlightRequests.set(requests.length);
-        return requests;
+        case "remove": {
+          removedModel = current.find((request) => request.id === stats.id)?.model ?? null;
+          requests = current.filter((request) => request.id !== stats.id);
+          break;
+        }
+      }
+      requests.sort((a, b) => {
+        const byTime = Date.parse(a.timestamp) - Date.parse(b.timestamp);
+        return byTime || a.id.localeCompare(b.id, undefined, { numeric: true });
       });
+      inflightRequestEntries.set(requests);
+      inFlightRequests.set(requests.length);
+      // Feed the per-model activity sparklines with this count change. The
+      // remove case explicitly records the (possibly zero) count of the
+      // removed request's model so the drop to zero is visible in history.
+      const counts = inflightCountsByModel(requests);
+      if (removedModel !== null && !(removedModel in counts)) {
+        counts[removedModel] = 0;
+      }
+      recordInflightCounts(counts);
       break;
     }
 
