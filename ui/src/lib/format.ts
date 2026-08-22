@@ -28,6 +28,13 @@ export function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + " MB";
 }
 
+/** Format a VRAM usage value in megabytes, e.g. "850 MB" or "12.3 GB". */
+export function formatVram(mb: number): string {
+  if (!Number.isFinite(mb) || mb <= 0) return "";
+  if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+  return Math.round(mb) + " MB";
+}
+
 /** Format a hardware capacity using binary units through TiB. */
 export function formatCapacity(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "Not detected";

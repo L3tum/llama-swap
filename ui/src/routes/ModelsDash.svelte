@@ -13,8 +13,10 @@
   import { statusDotColor } from "../stores/modelLoad";
   import { showUnlistedModels as showUnlisted, showCapabilityTags } from "../stores/modelDisplay";
   import { listCapabilityBadges, capabilityBadgeClass } from "../lib/capabilities";
+  import { formatVram } from "../lib/format";
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
+  import InflightIndicator from "../components/InflightIndicator.svelte";
   import Tag from "../components/Tag.svelte";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -86,14 +88,15 @@
         </div>
       {/if}
     {/if}
+    {#if model.vram_mb && model.vram_mb > 0}
+      <span class="text-muted-foreground text-xs tabular-nums" title="VRAM used">
+        {formatVram(model.vram_mb)}
+      </span>
+    {/if}
     <span class="text-muted-foreground text-xs uppercase tracking-wide">
       {model.state}
     </span>
-    {#if model.vram_mb && model.vram_mb > 0}
-      <span class="text-muted-foreground text-xs tabular-nums" title="VRAM used">
-        {model.vram_mb >= 1024 ? (model.vram_mb / 1024).toFixed(1) + " GB" : model.vram_mb + " MB"}
-      </span>
-    {/if}
+    <InflightIndicator modelId={model.id} />
     {#if model.unlisted}
       <Tag class="px-1.5 text-[0.625rem] uppercase">unlisted</Tag>
     {/if}

@@ -11,6 +11,7 @@
   import ModelLogsTab from "../components/model/ModelLogsTab.svelte";
   import ModelDetailsTab from "../components/model/ModelDetailsTab.svelte";
   import { modelServerPath } from "../lib/modelUtils";
+  import { formatVram } from "../lib/format";
 
   let modelId = $derived($params?.id ?? "");
 
@@ -36,6 +37,11 @@
           <span class={`size-2.5 shrink-0 rounded-full ${statusDotColor(model)}`}></span>
           <Card.Title class="text-lg">{model.name || model.id}</Card.Title>
           <span class="text-muted-foreground text-sm">({model.id})</span>
+          {#if model.vram_mb && model.vram_mb > 0}
+            <span class="text-muted-foreground text-xs tabular-nums" title="VRAM used">
+              {formatVram(model.vram_mb)}
+            </span>
+          {/if}
           <span class="text-muted-foreground text-xs uppercase tracking-wide">{model.state}</span>
           <div class="ml-auto flex items-center gap-2">
             {#if !model.peerID}

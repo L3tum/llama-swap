@@ -10,6 +10,7 @@
   import { performanceEnabled, models } from "../stores/api";
   import { showUnlistedModels } from "../stores/modelDisplay";
   import { modelsMenuOpen } from "../stores/sidebar";
+  import { formatVram } from "../lib/format";
   import type { Model } from "../lib/types";
   import ConnectionStatus from "./ConnectionStatus.svelte";
 
@@ -66,6 +67,14 @@
         <a href="/models/{encodeURIComponent(model.id)}" use:link {...props}>
           <span class={`size-2 shrink-0 rounded-full ${dotClass[statusDotColor(model)]}`}></span>
           <span class="flex-1 truncate">{model.id}</span>
+          {#if model.vram_mb && model.vram_mb > 0}
+            <span
+              class="shrink-0 text-[0.625rem] tabular-nums text-sidebar-foreground/50 group-data-[collapsible=icon]:hidden"
+              title="VRAM used"
+            >
+              {formatVram(model.vram_mb)}
+            </span>
+          {/if}
         </a>
       {/snippet}
     </Sidebar.MenuSubButton>
