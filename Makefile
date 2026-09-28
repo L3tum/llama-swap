@@ -161,6 +161,19 @@ test-ui:
 eval-docs-agent:
 	./evals/docs-agent/run.sh $(EVAL_ARGS)
 
+# Sync this fork with upstream: fetch, rebase the current branch onto
+# upstream/main, then run the full test suite. Requires a clean working
+# tree. If the rebase hits conflicts it stops and prints the next steps.
+sync-upstream:
+	@echo "==> Checking working tree is clean..."
+	@test -z "$$(git status --porcelain)" || { echo "Error: working tree is dirty. Commit or stash your changes first." >&2; exit 1; }
+	@echo "==> Fetching upstream..."
+	git fetch upstream
+	@echo "==> Rebasing onto upstream/main..."
+	@git rebase upstream/main || { echo "Rebase stopped (conflicts). Resolve them, then run: git rebase --continue && make test-all"; exit 1; }
+	@echo "==> Running full test suite..."
+	@$(MAKE) test-all
+
 # Phony targets
-.PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-chart test-dev test-ui wol-proxy kubeswap eval-docs-agent release
+.PHONY: all clean ui mac windows simple-responder simple-responder-windows test test-all test-chart test-dev test-ui wol-proxy kubeswap eval-docs-agent release sync-upstream
 .PHONY: linux linux-arm64 linux-amd64

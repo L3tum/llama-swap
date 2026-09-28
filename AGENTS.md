@@ -73,3 +73,33 @@ Follow these rules when performing a code review
 - Low severity are nice to have changes
 - Include a suggestion for high and medium severity items
 - Limit your code review to three items sorted by severity
+
+## Syncing with Upstream
+
+This repo is a fork. Make sure the `upstream` remote points at the original
+project (one-time setup):
+
+```bash
+git remote add upstream <original-project-url>
+```
+
+To pull in the latest upstream changes, run:
+
+```bash
+make sync-upstream
+```
+
+It fetches `upstream`, rebases the current branch onto `upstream/main`, and
+runs `make test-all`. It requires a clean working tree — commit or stash your
+changes first.
+
+If the rebase stops on conflicts, resolve them and finish:
+
+```bash
+git add <resolved files>
+git rebase --continue
+make test-all
+```
+
+Conflicts are expected where upstream and this fork change the same lines.
+Sync often so each rebase stays small.
