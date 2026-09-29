@@ -50,12 +50,14 @@ func (r *activityRepository) Insert(ctx context.Context, entry store.ActivityLog
 
 	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO activity (
-			ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
+			ts_created, src, remote_ip, user_agent, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, speed_approx, duration_ms, error_msg, metadata_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
 		entry.Src,
+		entry.RemoteIP,
+		entry.UserAgent,
 		entry.Model,
 		entry.ReqPath,
 		entry.RespContentType,
@@ -95,7 +97,7 @@ func (r *activityRepository) List(ctx context.Context, query store.ActivityQuery
 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT
-			id, ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
+			id, ts_created, src, remote_ip, user_agent, model_id, req_path, resp_content_type, resp_status_code,
 			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, speed_approx, duration_ms, error_msg, metadata_json
 		FROM activity`+where+activityOrderBy(query)+`
@@ -296,6 +298,8 @@ func scanActivity(scanner activityScanner) (store.ActivityLogEntry, error) {
 		&entry.ID,
 		&ts,
 		&entry.Src,
+		&entry.RemoteIP,
+		&entry.UserAgent,
 		&entry.Model,
 		&entry.ReqPath,
 		&entry.RespContentType,

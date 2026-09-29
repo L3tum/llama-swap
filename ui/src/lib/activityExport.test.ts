@@ -14,6 +14,8 @@ function entry(overrides: Partial<ActivityLogEntry> = {}): ActivityLogEntry {
   return {
     id: 1,
     src: "ip:127.0.0.1:1234",
+    remote_ip: "127.0.0.1",
+    user_agent: "test-agent/1.0",
     timestamp: new Date(2026, 5, 25, 12, 34, 56).toISOString(),
     model: "qwen3",
     req_path: "/v1/chat/completions",
@@ -49,6 +51,10 @@ describe("activity source export", () => {
   it("renders the trusted source column", () => {
     expect(activityCellText(entry({ src: "tc:nodekey:abc" }), "src")).toBe("tc:nodekey:abc");
     expect(activityCellText(entry({ src: "" }), "src")).toBe("-");
+    expect(activityCellText(entry({ remote_ip: "203.0.113.9" }), "identity")).toBe("203.0.113.9");
+    expect(activityCellText(entry({ remote_ip: "" }), "identity")).toBe("-");
+    expect(activityCellText(entry({ user_agent: "curl/8.0" }), "user_agent")).toBe("curl/8.0");
+    expect(activityCellText(entry({ user_agent: "" }), "user_agent")).toBe("-");
   });
 });
 

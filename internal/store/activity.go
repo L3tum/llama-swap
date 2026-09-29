@@ -23,6 +23,8 @@ type ActivityLogEntry struct {
 	ID              int               `json:"id"`
 	Timestamp       time.Time         `json:"timestamp"`
 	Src             string            `json:"src"`
+	RemoteIP        string            `json:"remote_ip"`
+	UserAgent       string            `json:"user_agent"`
 	Model           string            `json:"model"`
 	ReqPath         string            `json:"req_path"`
 	RespContentType string            `json:"resp_content_type"`

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mostlygeek/llama-swap/internal/cache"
 	"github.com/mostlygeek/llama-swap/internal/event"
@@ -143,6 +144,34 @@ func activitySource(r *http.Request) string {
 	return "ip:" + host
 }
 
+// activityRemoteIP resolves the client address for activity records, marking
+// proxy-header-derived values with the "xff:" prefix since a proxy header is
+// client-supplied and can be spoofed — the same convention activitySource uses.
+func activityRemoteIP(r *http.Request) string {
+	if ip, ok := forwardedIP(r); ok {
+		return "xff:" + ip
+	}
+	return clientIP(r)
+}
+
+// activityIdentityMaxLen bounds the identity fields recorded on activity rows.
+// Without it a hostile client could pad them up to the HTTP header size limit
+// and bloat the activity table.
+const activityIdentityMaxLen = 512
+
+// capActivityIdentity truncates value to activityIdentityMaxLen bytes, backing
+// off to a UTF-8 boundary so the result stays valid UTF-8.
+func capActivityIdentity(value string) string {
+	if len(value) <= activityIdentityMaxLen {
+		return value
+	}
+	cut := activityIdentityMaxLen
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
+}
+
 // record parses a completed response body and stores/emits an activity entry.
 // Successful requests store a zstd+CBOR capture (when enabled) with cf
 // controlling which parts are retained. Failed (non-200) requests capture the
@@ -159,6 +188,8 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		DurationMs:      int(time.Since(recorder.StartTime()).Milliseconds()),
 	}
 	tm.Src = activitySource(r)
+	tm.RemoteIP = capActivityIdentity(activityRemoteIP(r))
+	tm.UserAgent = capActivityIdentity(r.Header.Get("User-Agent"))
 
 	if ctxData, ok := swaputil.ReadContext(r.Context()); ok && len(ctxData.Metadata) > 0 {
 		tm.Metadata = make(map[string]string, len(ctxData.Metadata))

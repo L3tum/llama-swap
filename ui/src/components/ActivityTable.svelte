@@ -114,7 +114,11 @@
       { id: "id", label: "ID", defaultVisible: true },
       { id: "time", label: "Time", defaultVisible: true },
     ];
-    if (withSource) cols.push({ id: "src", label: "Source/Caller", defaultVisible: true });
+    if (withSource) {
+      cols.push({ id: "src", label: "Source/Caller", defaultVisible: true });
+      cols.push({ id: "identity", label: "Address", defaultVisible: true });
+      cols.push({ id: "user_agent", label: "User Agent", defaultVisible: true });
+    }
     if (withModel) cols.push({ id: "model", label: "Model", defaultVisible: true });
     cols.push(
       { id: "req_path", label: "Path", defaultVisible: false },
@@ -359,6 +363,22 @@
         accessorKey: "src",
         header: "Source/Caller",
         cell: ({ row }) => renderComponent(SourceCell, { source: row.original.src }),
+      },
+      {
+        id: "identity",
+        accessorKey: "remote_ip",
+        header: "Address",
+        enableSorting: false,
+        cell: ({ row }) =>
+          renderComponent(MiddleEllipsis, { value: row.original.remote_ip, tailLength: 8, className: "max-w-[12rem] font-mono text-xs" }),
+      },
+      {
+        id: "user_agent",
+        accessorKey: "user_agent",
+        header: "User Agent",
+        enableSorting: false,
+        cell: ({ row }) =>
+          renderComponent(MiddleEllipsis, { value: row.original.user_agent, tailLength: 18, className: "max-w-[20rem] text-xs" }),
       });
     }
 

@@ -72,6 +72,8 @@ export interface ActivityLogEntry {
   id: number;
   timestamp: string;
   src: string;
+  remote_ip: string;
+  user_agent: string;
   model: string;
   req_path: string;
   resp_content_type: string;

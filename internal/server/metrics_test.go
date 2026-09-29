@@ -10,11 +10,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mostlygeek/llama-swap/internal/chain"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
-	"github.com/mostlygeek/llama-swap/internal/store"
+	"github.com/mostlygeek/llama-swap/internal/store/sqlite"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
 	"github.com/tidwall/gjson"
 )
@@ -85,6 +86,57 @@ func TestServer_ActivitySourceForwardedHeaders(t *testing.T) {
 				t.Fatalf("activitySource() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestServer_ActivityRemoteIPMarksForwardedHeaders(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*http.Request)
+		want  string
+	}{
+		{"raw remote addr unmarked", func(r *http.Request) {}, "192.168.1.10"},
+		{"x-forwarded-for marked untrusted", func(r *http.Request) {
+			r.Header.Set("X-Forwarded-For", "203.0.113.10, 10.0.0.1")
+		}, "xff:203.0.113.10"},
+		{"x-real-ip marked untrusted", func(r *http.Request) {
+			r.Header.Set("X-Real-IP", "203.0.113.20")
+		}, "xff:203.0.113.20"},
+		{"x-forwarded-for takes priority over x-real-ip", func(r *http.Request) {
+			r.Header.Set("X-Forwarded-For", "203.0.113.10")
+			r.Header.Set("X-Real-IP", "203.0.113.20")
+		}, "xff:203.0.113.10"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.RemoteAddr = "192.168.1.10:54321"
+			test.setup(r)
+			if got := activityRemoteIP(r); got != test.want {
+				t.Fatalf("activityRemoteIP() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestServer_CapActivityIdentity(t *testing.T) {
+	short := "curl/8.0"
+	if got := capActivityIdentity(short); got != short {
+		t.Fatalf("short value changed: %q", got)
+	}
+
+	long := strings.Repeat("a", activityIdentityMaxLen+10)
+	if got := capActivityIdentity(long); len(got) != activityIdentityMaxLen {
+		t.Fatalf("long value capped to %d bytes, want %d", len(got), activityIdentityMaxLen)
+	}
+
+	// 171 × "€" is 513 bytes, so the cap lands mid-rune and must back off to
+	// the 510-byte UTF-8 boundary.
+	runic := strings.Repeat("€", 171)
+	if got := capActivityIdentity(runic); len(got) != activityIdentityMaxLen-2 {
+		t.Fatalf("rune cap = %d bytes, want %d", len(got), activityIdentityMaxLen-2)
+	} else if !utf8.ValidString(got) {
+		t.Fatalf("rune cap produced invalid UTF-8")
 	}
 }
 
@@ -645,9 +697,9 @@ func TestServer_MetricsMiddleware_UpstreamAudioCaptureSkipsRespBody(t *testing.T
 // monotonically. Retention must apply to file-backed stores too, keeping the
 // newest rows.
 func TestQueueMetrics_PrunesFileBackedStore(t *testing.T) {
-	st, err := store.New(filepath.Join(t.TempDir(), "test.sqlite"))
+	st, err := sqlite.New(filepath.Join(t.TempDir(), "test.sqlite"))
 	if err != nil {
-		t.Fatalf("store.New: %v", err)
+		t.Fatalf("sqlite.New: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	if st.IsInMemory() {
@@ -682,9 +734,9 @@ func TestQueueMetrics_PrunesFileBackedStore(t *testing.T) {
 // hatch: metricsMaxInMemory of 0 keeps every row, for deployments that use
 // a file-backed store for history and accept the growth.
 func TestQueueMetrics_FileStoreZeroMaxDisablesPruning(t *testing.T) {
-	st, err := store.New(filepath.Join(t.TempDir(), "test.sqlite"))
+	st, err := sqlite.New(filepath.Join(t.TempDir(), "test.sqlite"))
 	if err != nil {
-		t.Fatalf("store.New: %v", err)
+		t.Fatalf("sqlite.New: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
