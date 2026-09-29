@@ -382,8 +382,26 @@ func (s *Server) handleAPIPerformance(w http.ResponseWriter, r *http.Request) {
 		"enabled":        true,
 		"sys_stats":      sysStats,
 		"gpu_stats":      gpuStats,
-		"gpu_proc_stats": s.perf.LatestProcesses(),
+		"gpu_proc_stats": s.annotateContainerNames(s.perf.LatestProcesses()),
 	})
+}
+
+// annotateContainerNames returns a copy of procs with ContainerName filled in
+// for PIDs that belong to a running docker container. The input slice comes
+// from the perf ring buffer and must not be mutated. A request-local
+// parent-PID cache is shared between the lookups.
+func (s *Server) annotateContainerNames(procs []perf.GpuProcStat) []perf.GpuProcStat {
+	if len(procs) == 0 {
+		return procs
+	}
+
+	annotated := make([]perf.GpuProcStat, len(procs))
+	parentCache := make(map[int]int)
+	for i, p := range procs {
+		p.ContainerName = s.containerNames.nameFor(p.PID, parentCache)
+		annotated[i] = p
+	}
+	return annotated
 }
 
 // handleAPIVersion serves the build metadata.

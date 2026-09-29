@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The Performance tab's GPU process list now shows the docker container name
+  for each process, when the docker CLI is available on the host
+  llama-swap runs on. Processes outside a container are left blank.
+
 ## v260
 
 This release fixes a crash at startup on macOS 27 with Apple M6 hardware

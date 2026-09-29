@@ -450,6 +450,7 @@
               <tr class="border-b text-left text-muted-foreground">
                 <th class="pb-2 pr-4">PID</th>
                 <th class="pb-2 pr-4">Process Name</th>
+                <th class="pb-2 pr-4">Container</th>
                 <th class="pb-2 text-right">VRAM (MB)</th>
               </tr>
             </thead>
@@ -458,6 +459,7 @@
                 <tr class="border-b border-border/50">
                   <td class="py-1.5 pr-4 font-mono">{proc.pid}</td>
                   <td class="py-1.5 pr-4">{proc.process_name}</td>
+                  <td class="py-1.5 pr-4 text-muted-foreground">{proc.container_name || "—"}</td>
                   <td class="py-1.5 text-right font-medium">{proc.mem_used_mb.toLocaleString()}</td>
                 </tr>
               {/each}

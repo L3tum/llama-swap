@@ -42,6 +42,10 @@ type Server struct {
 	hardware  *hw.HardwareSnapshot
 	vramCache dockerPIDCache
 
+	// containerNames resolves GPU process PIDs to docker container names for
+	// the performance tab.
+	containerNames *containerNameResolver
+
 	// reference is llama-swap's own embedded documentation, served to the
 	// Playground's agentic chat and to external MCP clients through /api/mcp.
 	// It is immutable and independent of cfg, so the same library is shared
@@ -234,20 +238,21 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 
 	shutdownCtx, shutdownFn := context.WithCancel(context.Background())
 	s := &Server{
-		cfg:           cfg,
-		logs:          logs,
-		perf:          perfMon,
-		inflight:      newInflightTracker(),
-		metrics:       newMetricsMonitor(logs.ProxyLogs, cfg.MetricsMaxInMemory, cfg.CaptureBuffer, st),
-		store:         st,
-		build:         build,
-		hardware:      hardware,
-		reference:     refs,
-		activeProfile: cfg.Hooks.OnStartup.Profile,
-		local:         local,
-		peer:          peer,
-		shutdownCtx:   shutdownCtx,
-		shutdownFn:    shutdownFn,
+		cfg:            cfg,
+		logs:           logs,
+		perf:           perfMon,
+		inflight:       newInflightTracker(),
+		metrics:        newMetricsMonitor(logs.ProxyLogs, cfg.MetricsMaxInMemory, cfg.CaptureBuffer, st),
+		store:          st,
+		build:          build,
+		hardware:       hardware,
+		reference:      refs,
+		activeProfile:  cfg.Hooks.OnStartup.Profile,
+		local:          local,
+		peer:           peer,
+		shutdownCtx:    shutdownCtx,
+		shutdownFn:     shutdownFn,
+		containerNames: &containerNameResolver{},
 	}
 	s.capcompat = capcompat.New(st.Cache(), logs.ProxyLogs)
 	s.capcompatCancel = event.On(s.onProcessStateChange)

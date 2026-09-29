@@ -23,6 +23,10 @@ type GpuProcStat struct {
 	PID         int       `json:"pid"`
 	MemUsedMB   int       `json:"mem_used_mb"`
 	ProcessName string    `json:"process_name"`
+
+	// ContainerName is the docker container this process runs in, empty for
+	// processes outside a container or when docker is unavailable.
+	ContainerName string `json:"container_name"`
 }
 
 type NetIOStat struct {

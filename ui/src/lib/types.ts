@@ -183,6 +183,7 @@ export interface GpuProcStat {
   pid: number;
   mem_used_mb: number;
   process_name: string;
+  container_name?: string;
 }
 
 export interface PerformanceResponse {
