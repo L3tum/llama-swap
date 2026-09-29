@@ -75,15 +75,18 @@ func TestGroup_NewGroup_ErrorPath_ReleasesMonitors(t *testing.T) {
 			"a": {},
 		},
 	}
-	log := logmon.NewWriter(io.Discard)
-	if _, err := NewGroup(conf, log, log); err == nil {
+	logs := logmon.NewGroup(io.Discard, true, true, true)
+	if _, err := NewGroup(conf, logs); err == nil {
 		t.Fatal("expected NewGroup to fail: member missing from Models")
 	}
-	// The error path deliberately does not close the shared proxy/upstream
-	// log (in production it is owned by the server and outlives NewGroup), so
-	// the test closes it itself; otherwise its broadcastLoop goroutine is the
-	// single +1 the leak check below would flag.
-	log.Close()
+	// The error path deliberately does not close the shared log group (in
+	// production it is owned by the server and outlives NewGroup), so the
+	// test closes its monitors itself; otherwise their broadcastLoop
+	// goroutines are the +4 the leak check below would flag.
+	logs.MuxLogs.Close()
+	logs.ProxyLogs.Close()
+	logs.UpstreamLogs.Close()
+	logs.HttpLogs.Close()
 
 	deadline := time.Now().Add(5 * time.Second)
 	min := runtime.NumGoroutine()
