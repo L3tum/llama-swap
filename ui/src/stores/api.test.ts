@@ -3,11 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activeProfile,
   activityRevision,
+  enableAPIEvents,
   fetchPlaygroundModels,
   fetchProfiles,
   fetchTailcatStatus,
   getActivity,
   getHardware,
+  globalLock,
   handleAPIEventMessage,
   hasListedModels,
   inFlightRequests,
@@ -371,5 +373,42 @@ describe("api store event handling", () => {
     await first;
 
     await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("load lock", () => {
+  it("applies the loadLock envelope to the global flag", () => {
+    expect(get(globalLock)).toBe(false);
+
+    handleAPIEventMessage(
+      JSON.stringify({ type: "loadLock", data: JSON.stringify({ global: true }) })
+    );
+    expect(get(globalLock)).toBe(true);
+
+    handleAPIEventMessage(
+      JSON.stringify({ type: "loadLock", data: JSON.stringify({ global: false }) })
+    );
+    expect(get(globalLock)).toBe(false);
+  });
+
+  it("carries the per-model locked flag through modelStatus", () => {
+    handleAPIEventMessage(
+      JSON.stringify({
+        type: "modelStatus",
+        data: JSON.stringify([
+          { id: "locked-model", name: "Locked", state: "ready", locked: true },
+          { id: "free-model", name: "Free", state: "stopped" },
+        ]),
+      })
+    );
+    const byId = Object.fromEntries(get(models).map((m) => [m.id, m]));
+    expect(byId["locked-model"].locked).toBe(true);
+    expect(byId["free-model"].locked).toBeUndefined();
+  });
+
+  it("clears the global flag when events are disabled", () => {
+    globalLock.set(true);
+    enableAPIEvents(false);
+    expect(get(globalLock)).toBe(false);
   });
 });

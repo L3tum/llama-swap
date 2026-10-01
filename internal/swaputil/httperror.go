@@ -150,3 +150,23 @@ func (e ConcurrencyLimitError) message() string {
 	}
 	return "Too many requests"
 }
+
+// ModelLockedError is an HTTPError for a 423 rejection of a request that
+// would load a model whose load is locked (globally or per model).
+type ModelLockedError struct {
+	ModelID string
+}
+
+func (e ModelLockedError) Error() string { return "model " + e.ModelID + " is locked" }
+
+func (e ModelLockedError) StatusCode() int { return http.StatusLocked }
+
+func (e ModelLockedError) Header() http.Header {
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	return h
+}
+
+func (e ModelLockedError) Body() []byte {
+	return NewErrorEnvelope(e.StatusCode(), "model "+e.ModelID+" is locked; load refused", "locked").JSON()
+}

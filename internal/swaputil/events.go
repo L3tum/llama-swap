@@ -9,6 +9,7 @@ const ModelPreloadedEventID = 0x06
 const InFlightRequestsEventID = 0x07
 const ProfileChangedEventID = 0x08
 const ModelCapabilitiesChangedEventID = 0x09
+const LoadChangedEventID = 0x0A
 
 // ProcessStateChangeEvent is emitted whenever a process transitions between
 // lifecycle states. States are carried as strings so this package stays a leaf
@@ -91,4 +92,14 @@ type ModelCapabilitiesChangedEvent struct {
 
 func (e ModelCapabilitiesChangedEvent) Type() uint32 {
 	return ModelCapabilitiesChangedEventID
+}
+
+// LoadChangedEvent is emitted whenever the load-lock state changes (the global
+// lock is engaged/released, or a per-model lock is toggled). Subscribers that
+// need the state re-read it from the source (the router); the event itself
+// carries no payload.
+type LoadChangedEvent struct{}
+
+func (e LoadChangedEvent) Type() uint32 {
+	return LoadChangedEventID
 }

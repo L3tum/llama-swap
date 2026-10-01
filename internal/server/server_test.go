@@ -37,6 +37,12 @@ type stubRouter struct {
 	unloadModels  []string
 	unloadTimeout time.Duration
 	loggers       map[string]*logmon.Monitor
+
+	// load-lock state and call recording
+	globalLocked     bool
+	lockedModels     map[string]bool
+	modelLockCalls   []string
+	modelUnlockCalls []string
 }
 
 func newStubRouter(models []string, response string) *stubRouter {
@@ -81,6 +87,24 @@ func (s *stubRouter) ProcessLogger(modelID string) (*logmon.Monitor, bool) {
 }
 
 func (s *stubRouter) GetProcess(modelID string) process.Process { return nil }
+
+func (s *stubRouter) EngageLoadLock()  { s.globalLocked = true }
+func (s *stubRouter) ReleaseLoadLock() { s.globalLocked = false }
+func (s *stubRouter) LockModel(modelID string) {
+	if s.lockedModels == nil {
+		s.lockedModels = map[string]bool{}
+	}
+	s.modelLockCalls = append(s.modelLockCalls, modelID)
+	s.lockedModels[modelID] = true
+}
+func (s *stubRouter) UnlockModel(modelID string) {
+	s.modelUnlockCalls = append(s.modelUnlockCalls, modelID)
+	delete(s.lockedModels, modelID)
+}
+func (s *stubRouter) GlobalLockEngaged() bool { return s.globalLocked }
+func (s *stubRouter) LoadBlocked(modelID string) bool {
+	return s.globalLocked || s.lockedModels[modelID]
+}
 
 // newTestServer wires a Server with stub routers and a built mux.
 func newTestServer(local router.LocalRouter, peer router.Router) *Server {

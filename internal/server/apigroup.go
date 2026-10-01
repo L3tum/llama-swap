@@ -38,6 +38,10 @@ type apiModel struct {
 	// differs from the server's doesn't skew the uptime.
 	UptimeMs int64 `json:"uptimeMs,omitempty"`
 	VramMB   int   `json:"vram_mb,omitempty"`
+	// Locked reports the effective load-lock state (global lock or this
+	// model's own lock). Only meaningful for local models; peers never load
+	// and are appended with it false.
+	Locked bool `json:"locked,omitempty"`
 }
 
 type apiProfile struct {
@@ -151,6 +155,7 @@ func (s *Server) modelStatus() []apiModel {
 			ContextLength: ctxLen,
 			ReadySince:    readySince,
 			UptimeMs:      uptimeMs,
+			Locked:        s.local.LoadBlocked(id),
 		}
 		if proc, ok := running[id]; ok {
 			_ = proc
@@ -192,6 +197,59 @@ func (s *Server) handleAPIUnloadModel(w http.ResponseWriter, r *http.Request) {
 	s.local.Unload(0, realName)
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+// handleAPIEngageGlobalLock engages the global load lock: while it is
+// engaged, no model that is not already running will be loaded in response
+// to requests.
+func (s *Server) handleAPIEngageGlobalLock(w http.ResponseWriter, r *http.Request) {
+	s.local.EngageLoadLock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"locked": true})
+}
+
+// handleAPIReleaseGlobalLock disengages the global load lock.
+func (s *Server) handleAPIReleaseGlobalLock(w http.ResponseWriter, r *http.Request) {
+	s.local.ReleaseLoadLock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"locked": false})
+}
+
+// handleAPILockModel engages the per-model load lock for a named local model:
+// requests for the model are refused even while it is stopped, but a running
+// instance keeps serving.
+func (s *Server) handleAPILockModel(w http.ResponseWriter, r *http.Request) {
+	requested := strings.TrimPrefix(r.PathValue("model"), "/")
+	realName, found := s.cfg.RealModelName(requested)
+	if !found {
+		swaputil.SendResponse(w, r, http.StatusNotFound, "model not found")
+		return
+	}
+	if !s.local.Handles(realName) {
+		swaputil.SendResponse(w, r, http.StatusNotFound, "no local server found for requested model")
+		return
+	}
+	s.local.LockModel(realName)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"locked": true})
+}
+
+// handleAPIUnlockModel disengages the per-model load lock for a named local
+// model.
+func (s *Server) handleAPIUnlockModel(w http.ResponseWriter, r *http.Request) {
+	requested := strings.TrimPrefix(r.PathValue("model"), "/")
+	realName, found := s.cfg.RealModelName(requested)
+	if !found {
+		swaputil.SendResponse(w, r, http.StatusNotFound, "model not found")
+		return
+	}
+	if !s.local.Handles(realName) {
+		swaputil.SendResponse(w, r, http.StatusNotFound, "no local server found for requested model")
+		return
+	}
+	s.local.UnlockModel(realName)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"locked": false})
 }
 
 // handleAPIActivity serves paginated activity table rows.
@@ -534,6 +592,7 @@ const (
 	msgTypeInFlight    messageType = "inflight"
 	msgTypeUIConfig    messageType = "uiConfig"
 	msgTypeProfile     messageType = "profileChanged"
+	msgTypeLoadLock    messageType = "loadLock"
 )
 
 // sendDropReportInterval is how often an SSE handler reports messages that
@@ -657,6 +716,11 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 				send(messageEnvelope{Type: msgTypeProfile, Data: string(j)})
 			}
 		}
+		sendLoadLock := func() {
+			if j, err := json.Marshal(map[string]any{"global": s.local.GlobalLockEngaged()}); err == nil {
+				send(messageEnvelope{Type: msgTypeLoadLock, Data: string(j)})
+			}
+		}
 
 		unsubscribe := []context.CancelFunc{
 			event.On(func(e swaputil.ProcessStateChangeEvent) { sendModels() }),
@@ -664,6 +728,10 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			event.On(func(e swaputil.ConfigFileChangedEvent) { sendModels() }),
 			event.On(func(e swaputil.ProfileChangedEvent) {
 				sendProfile()
+				sendModels()
+			}),
+			event.On(func(e swaputil.LoadChangedEvent) {
+				sendLoadLock()
 				sendModels()
 			}),
 			event.On(func(e ActivityLogEvent) { sendActivity(e.Metrics.ID) }),
@@ -674,6 +742,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		sendModels()
 		sendUIConfig()
 		sendProfile()
+		sendLoadLock()
 		sendInFlight(s.inflight.Current())
 
 		// GPU process VRAM updates (fork feature): refresh the model status

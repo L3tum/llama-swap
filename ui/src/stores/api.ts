@@ -12,6 +12,7 @@ import type {
   UIConfig,
   Profile,
   ProfileState,
+  LoadLockState,
   PlaygroundModelType,
   HardwareSnapshot,
   TailcatStatus,
@@ -25,6 +26,8 @@ export const models = writable<Model[]>([]);
 export const playgroundModels = writable<Model[]>([]);
 export const profiles = writable<Profile[]>([]);
 export const activeProfile = writable<string | null>(null);
+// Global load-lock flag; per-model state rides on each model's `locked` field.
+export const globalLock = writable(false);
 
 // Model records used by Playground come from the OpenAI-compatible listing.
 export const profileModels = derived(
@@ -71,6 +74,7 @@ export function enableAPIEvents(enabled: boolean): void {
     playgroundModels.set([]);
     profiles.set([]);
     activeProfile.set(null);
+    globalLock.set(false);
     profileRevision++;
     return;
   }
@@ -96,6 +100,7 @@ export function enableAPIEvents(enabled: boolean): void {
       playgroundModels.set([]);
       profiles.set([]);
       activeProfile.set(null);
+      globalLock.set(false);
       profileRevision++;
       retryCount = 0;
       connectionState.set("connected");
@@ -198,6 +203,12 @@ export function handleAPIEventMessage(data: string): void {
       const state = JSON.parse(message.data) as Pick<ProfileState, "active">;
       profileRevision++;
       activeProfile.set(state.active);
+      break;
+    }
+
+    case "loadLock": {
+      const state = JSON.parse(message.data) as LoadLockState;
+      globalLock.set(state.global);
       break;
     }
   }
@@ -422,6 +433,38 @@ export async function unloadSingleModel(model: string): Promise<void> {
   } catch (error) {
     console.error("Failed to unload model", model, error);
     throw error;
+  }
+}
+
+export async function engageGlobalLock(): Promise<void> {
+  const response = await fetch("/api/lock", { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`Failed to engage global lock: ${response.status}`);
+  }
+}
+
+export async function releaseGlobalLock(): Promise<void> {
+  const response = await fetch("/api/lock/unlock", { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`Failed to release global lock: ${response.status}`);
+  }
+}
+
+export async function lockModel(model: string): Promise<void> {
+  const response = await fetch(`/api/models/lock/${encodeURIComponent(model)}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to lock model: ${response.status}`);
+  }
+}
+
+export async function unlockModel(model: string): Promise<void> {
+  const response = await fetch(`/api/models/unlock/${encodeURIComponent(model)}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to unlock model: ${response.status}`);
   }
 }
 

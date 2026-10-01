@@ -1,9 +1,10 @@
 <script lang="ts">
   import { params } from "svelte-spa-router";
-  import { models } from "../stores/api";
+  import { globalLock, models } from "../stores/api";
   import { statusDotColor } from "../stores/modelLoad";
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
+  import ModelLockButton from "../components/ModelLockButton.svelte";
   import CopyableId from "../components/CopyableId.svelte";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Tabs, TabsList, TabsTrigger, TabsContent } from "$lib/components/ui/tabs/index.js";
@@ -92,6 +93,7 @@
               >
                 <ExternalLink class="size-4" />
               </a>
+              <ModelLockButton {model} size="sm" globalLocked={$globalLock} />
               <ModelLoadButton {model} size="sm" />
             {/if}
           </div>

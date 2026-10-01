@@ -57,6 +57,7 @@ type stopRec struct {
 type fakeEffects struct {
 	states       map[string]process.ProcessState // model -> state; missing => not handled
 	serveResult  map[string]bool                 // GrantServe return per model (default true)
+	blocked      map[string]bool                 // LoadBlocked per model
 	lastServeReq HandlerReq
 
 	starts []startRec
@@ -68,6 +69,7 @@ func newFakeEffects() *fakeEffects {
 	return &fakeEffects{
 		states:      map[string]process.ProcessState{},
 		serveResult: map[string]bool{},
+		blocked:     map[string]bool{},
 	}
 }
 
@@ -109,6 +111,10 @@ func (f *fakeEffects) StopProcesses(timeout time.Duration, ids []string) {
 	f.stops = append(f.stops, stopRec{timeout: timeout, ids: ids})
 }
 
+func (f *fakeEffects) LoadBlocked(modelID string) bool {
+	return f.blocked[modelID]
+}
+
 // served counts grants that handed modelID a handler and were received.
 func (f *fakeEffects) served(modelID string) int {
 	n := 0
@@ -140,6 +146,29 @@ func (f *fakeEffects) startsFor(modelID string) int {
 		}
 	}
 	return n
+}
+
+// lastError returns the most recent error grant for modelID, or nil.
+func (f *fakeEffects) lastError(modelID string) error {
+	for i := len(f.grants) - 1; i >= 0; i-- {
+		if g := f.grants[i]; g.model == modelID && g.err != nil {
+			return g.err
+		}
+	}
+	return nil
+}
+
+// assertModelLockedErr reports a failure if err is not a
+// swaputil.ModelLockedError for modelID.
+func assertModelLockedErr(t *testing.T, err error, modelID string) {
+	t.Helper()
+	var locked swaputil.ModelLockedError
+	if !errors.As(err, &locked) {
+		t.Fatalf("err=%v want ModelLockedError", err)
+	}
+	if locked.ModelID != modelID {
+		t.Fatalf("ModelLockedError.ModelID=%q want %q", locked.ModelID, modelID)
+	}
 }
 
 func newFIFO(planner Swapper, eff Effects) *FIFO {
@@ -944,5 +973,149 @@ func TestFIFO_ConcurrencyLimit_CancelledQueuedWaiterReleasesReservation(t *testi
 
 	if got := len(s.queued); got != 1 {
 		t.Fatalf("queue len=%d want 1 after cancel and retry", got)
+	}
+}
+
+// TestFIFO_LoadLocked_StopsStoppedModel verifies a request for a stopped model
+// whose load is locked is rejected with ModelLockedError (no swap), that the
+// rejected request's admission reservation is released, and that the model
+// loads again once the lock is released.
+func TestFIFO_LoadLocked_StopsStoppedModel(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateStopped
+	eff.blocked["a"] = true
+	s := newFIFO(&stubPlanner{}, eff)
+
+	r := req("a")
+	s.OnRequest(r)
+	assertAdmitted(t, r)
+	if got := eff.startsFor("a"); got != 0 {
+		t.Fatalf("StartSwap(a)=%d want 0 while locked", got)
+	}
+	if got := eff.errored("a"); got != 1 {
+		t.Fatalf("errored(a)=%d want 1", got)
+	}
+	assertModelLockedErr(t, eff.lastError("a"), "a")
+
+	// Lock released: a new request for the same model loads it. A second
+	// admission also proves the rejected request's reservation was released.
+	eff.blocked["a"] = false
+	r2 := req("a")
+	s.OnRequest(r2)
+	assertAdmitted(t, r2)
+	if got := eff.startsFor("a"); got != 1 {
+		t.Fatalf("StartSwap(a)=%d want 1 after unlock", got)
+	}
+}
+
+// TestFIFO_LoadLocked_ReadyModelStillServed verifies the lock only blocks new
+// loads: a model that is already ready keeps being served on the fast path.
+func TestFIFO_LoadLocked_ReadyModelStillServed(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateReady
+	eff.blocked["a"] = true
+	s := newFIFO(&stubPlanner{}, eff)
+
+	s.OnRequest(req("a"))
+	if got := eff.served("a"); got != 1 {
+		t.Fatalf("served(a)=%d want 1 (ready model is unaffected by the lock)", got)
+	}
+	if got := eff.errored("a"); got != 0 {
+		t.Errorf("errored(a)=%d want 0", got)
+	}
+	if got := eff.startsFor("a"); got != 0 {
+		t.Errorf("StartSwap(a)=%d want 0", got)
+	}
+}
+
+// TestFIFO_LoadLocked_InFlightSwapKeepsJoining verifies a swap that started
+// before the lock was engaged runs to completion and still accepts joiners; a
+// second swap is never started for the locked model.
+func TestFIFO_LoadLocked_InFlightSwapKeepsJoining(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateStopped
+	s := newFIFO(&stubPlanner{}, eff)
+
+	s.OnRequest(req("a")) // starts swap while unlocked
+	eff.blocked["a"] = true
+	s.OnRequest(req("a")) // joins the in-flight swap
+	if got := eff.startsFor("a"); got != 1 {
+		t.Fatalf("StartSwap(a)=%d want 1 (lock must not start a second swap)", got)
+	}
+
+	eff.states["a"] = process.StateReady
+	s.OnSwapDone(SwapDone{ModelID: "a"})
+	if got := eff.served("a"); got != 2 {
+		t.Errorf("served(a)=%d want 2 (committed swap serves all waiters)", got)
+	}
+}
+
+// TestFIFO_LoadLocked_QueuedRequestRejectedOnOnLocksChanged verifies a request
+// parked in the queue that would start a new load is rejected when the lock is
+// engaged and OnLocksChanged sweeps the queue.
+func TestFIFO_LoadLocked_QueuedRequestRejectedOnOnLocksChanged(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateStopped
+	eff.states["b"] = process.StateStopped
+	// b evicts a, so a request for b queues while a is loading.
+	s := newFIFO(&stubPlanner{evict: map[string][]string{"b": {"a"}}}, eff)
+
+	bReq := req("b")
+	s.OnRequest(req("a")) // StartSwap(a)
+	s.OnRequest(bReq)     // queued (collides with a's in-flight swap)
+	assertAdmitted(t, bReq)
+	if len(s.queued) != 1 {
+		t.Fatalf("queue len=%d want 1", len(s.queued))
+	}
+
+	eff.blocked["b"] = true
+	s.OnLocksChanged()
+
+	if got := len(s.queued); got != 0 {
+		t.Fatalf("queue len=%d want 0 after lock sweep", got)
+	}
+	if got := eff.startsFor("b"); got != 0 {
+		t.Fatalf("StartSwap(b)=%d want 0 (locked request must not load)", got)
+	}
+	assertModelLockedErr(t, eff.lastError("b"), "b")
+}
+
+// TestFIFO_LoadLocked_DrainQueueRejectsWhileEngaged verifies drainQueue itself
+// refuses to start a now-eligible queued request while the lock is engaged
+// (rather than holding it), and that the same request starts normally once
+// the lock is released.
+func TestFIFO_LoadLocked_DrainQueueRejectsWhileEngaged(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateStopped
+	eff.states["b"] = process.StateStopped
+	// b evicts a, so a request for b queues while a is loading.
+	s := newFIFO(&stubPlanner{evict: map[string][]string{"b": {"a"}}}, eff)
+
+	bReq := req("b")
+	s.OnRequest(req("a")) // StartSwap(a)
+	s.OnRequest(bReq)     // queued
+	assertAdmitted(t, bReq)
+
+	// Engage the lock before a's swap completes.
+	eff.blocked["b"] = true
+	eff.states["a"] = process.StateReady
+	s.OnSwapDone(SwapDone{ModelID: "a"}) // drainQueue: b eligible but locked
+
+	if got := eff.startsFor("b"); got != 0 {
+		t.Fatalf("StartSwap(b)=%d want 0 while locked", got)
+	}
+	if got := len(s.queued); got != 0 {
+		t.Fatalf("queue len=%d want 0 (locked request rejected, not held)", got)
+	}
+	assertModelLockedErr(t, eff.lastError("b"), "b")
+
+	// Release the lock and send a fresh request: b now starts.
+	s.OnServeDone(ServeDoneEvent{ModelID: "a"}) // a fully drained
+	eff.blocked["b"] = false
+	newReq := req("b")
+	s.OnRequest(newReq)
+	assertAdmitted(t, newReq)
+	if got := eff.startsFor("b"); got != 1 {
+		t.Fatalf("StartSwap(b)=%d want 1 after unlock", got)
 	}
 }

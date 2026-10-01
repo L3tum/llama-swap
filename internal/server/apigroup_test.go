@@ -14,6 +14,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/cache"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/hw"
+	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/store"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
 )
@@ -715,5 +716,141 @@ func TestServer_APILogEvents_InvalidStream(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("%s: status = %d, want 400", target, w.Code)
 		}
+	}
+}
+
+// TestServer_APILockGlobal verifies the global load-lock endpoints: engage and
+// release report the post-toggle state and drive the router.
+func TestServer_APILockGlobal(t *testing.T) {
+	local := newStubRouter(nil, "")
+	s := newTestServer(local, newStubRouter(nil, ""))
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/lock", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/lock status = %d", w.Code)
+	}
+	var got map[string]bool
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !got["locked"] {
+		t.Errorf("body = %v, want locked=true", got)
+	}
+	if !local.GlobalLockEngaged() {
+		t.Error("GlobalLockEngaged()=false after POST /api/lock")
+	}
+
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/lock/unlock", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /api/lock/unlock status = %d", w.Code)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["locked"] {
+		t.Errorf("body = %v, want locked=false", got)
+	}
+	if local.GlobalLockEngaged() {
+		t.Error("GlobalLockEngaged()=true after POST /api/lock/unlock")
+	}
+}
+
+// TestServer_APILockModel verifies per-model lock endpoints: real names and
+// aliases lock the real model, unknown and peer models 404, and unlock resets
+// the state.
+func TestServer_APILockModel(t *testing.T) {
+	cfg, err := config.LoadConfigFromReader(strings.NewReader(`
+models:
+  a:
+    cmd: echo ${PORT}
+    aliases: [alias-a]
+peers:
+  remote:
+    proxy: http://example.com
+    models: [remote-model]
+`))
+	if err != nil {
+		t.Fatalf("LoadConfigFromReader: %v", err)
+	}
+	local := newStubRouter([]string{"a"}, "")
+	s := newTestServerWithConfig(cfg, local, newStubRouter(nil, ""))
+
+	post := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, nil))
+		return w
+	}
+
+	w := post("/api/models/lock/a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("lock a status = %d body=%q", w.Code, w.Body.String())
+	}
+	if !local.LoadBlocked("a") {
+		t.Error("LoadBlocked(a)=false after locking the model")
+	}
+
+	// The alias resolves to the real model.
+	w = post("/api/models/lock/alias-a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("lock alias-a status = %d body=%q", w.Code, w.Body.String())
+	}
+	if len(local.modelLockCalls) != 2 || local.modelLockCalls[0] != "a" || local.modelLockCalls[1] != "a" {
+		t.Errorf("modelLockCalls = %v, want [a a]", local.modelLockCalls)
+	}
+
+	// Unknown model 404s.
+	w = post("/api/models/lock/ghost")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("lock ghost status = %d, want 404", w.Code)
+	}
+	// Peer model 404s: no local router handles it.
+	w = post("/api/models/lock/remote/remote-model")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("lock peer model status = %d, want 404", w.Code)
+	}
+
+	// Unlock resets the state.
+	w = post("/api/models/unlock/a")
+	if w.Code != http.StatusOK {
+		t.Fatalf("unlock a status = %d body=%q", w.Code, w.Body.String())
+	}
+	if local.LoadBlocked("a") {
+		t.Error("LoadBlocked(a)=true after unlock")
+	}
+}
+
+// TestServer_ModelStatus_Locked verifies the modelStatus payload carries the
+// effective lock state for local models and leaves peer entries unlocked.
+func TestServer_ModelStatus_Locked(t *testing.T) {
+	local := newStubRouter(nil, "")
+	local.running = map[string]process.ProcessState{"loaded": process.StateReady}
+	local.lockedModels = map[string]bool{"loaded": true}
+	s := newTestServer(local, newStubRouter(nil, ""))
+	s.cfg = config.Config{
+		Models: map[string]config.ModelConfig{"loaded": {}},
+		Peers:  config.PeerDictionaryConfig{"remote": {Models: []string{"remote-model"}}},
+	}
+
+	got := s.modelStatus()
+	if len(got) != 2 {
+		t.Fatalf("modelStatus len=%d want 2", len(got))
+	}
+	byID := map[string]apiModel{}
+	for _, m := range got {
+		byID[m.Id] = m
+	}
+	loaded, ok := byID["loaded"]
+	if !ok {
+		t.Fatalf("missing local model %q in %v", "loaded", byID)
+	}
+	if !loaded.Locked {
+		t.Error("Locked=false, want true for the locked local model")
+	}
+	peer, ok := byID[config.PeerModelFQN("remote", "remote-model")]
+	if !ok || peer.Locked {
+		t.Errorf("peer entry=%+v, want present and not locked", peer)
 	}
 }

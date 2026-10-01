@@ -66,6 +66,12 @@ type Scheduler interface {
 	// swap waiters and queued requests). Process teardown is the baseRouter's
 	// responsibility.
 	OnShutdown(err error)
+	// OnLocksChanged is called after the load-lock state changes. It re-runs
+	// the decision tree for queued requests: a queued request that would
+	// start a new load under an engaged lock is rejected with the locked
+	// error; requests that are still joinable (an in-flight swap for the same
+	// model) or fast-pathable (the model is ready) are not affected.
+	OnLocksChanged()
 }
 
 // Effects is implemented by the baseRouter. The scheduler calls back through it
@@ -90,6 +96,10 @@ type Effects interface {
 	// StopProcesses stops the named processes in parallel and blocks until all
 	// have stopped. Unknown IDs are skipped.
 	StopProcesses(timeout time.Duration, ids []string)
+	// LoadBlocked reports whether loading modelID is currently blocked by an
+	// engaged load lock (global or per-model). The scheduler consults it
+	// before starting or queueing a new load.
+	LoadBlocked(modelID string) bool
 }
 
 // New returns a Scheduler selected by conf.Routing.Scheduler.Use, configured

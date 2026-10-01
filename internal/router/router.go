@@ -61,4 +61,26 @@ type LocalRouter interface {
 	// GetProcess returns the process for the named model, or nil when the
 	// model is not known to this router.
 	GetProcess(modelID string) process.Process
+
+	// EngageLoadLock engages the global load lock: while engaged, no model
+	// that is not already running will be loaded in response to requests.
+	EngageLoadLock()
+
+	// ReleaseLoadLock disengages the global load lock.
+	ReleaseLoadLock()
+
+	// LockModel engages the per-model load lock for modelID: requests for
+	// the model are refused even while it is stopped. modelID must be a
+	// real (non-alias) config key.
+	LockModel(modelID string)
+
+	// UnlockModel disengages the per-model load lock for modelID.
+	UnlockModel(modelID string)
+
+	// GlobalLockEngaged reports whether the global load lock is engaged.
+	GlobalLockEngaged() bool
+
+	// LoadBlocked reports whether loading modelID is currently blocked, by
+	// the global lock or the model's own lock.
+	LoadBlocked(modelID string) bool
 }

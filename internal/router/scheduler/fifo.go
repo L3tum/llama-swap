@@ -85,11 +85,14 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 //  3. Fast path — the target process is already ready, the planner sees
 //     nothing to evict, and no in-flight swap is evicting it. Hand back its
 //     ServeHTTP immediately.
-//  4. Would collide with an in-flight swap (we'd stop their target, or they're
+//  4. Load blocked — the model's load is locked (globally or per-model):
+//     respond with ModelLockedError. Steps 2 and 3 run first, so models
+//     already running or swapping keep being served while locked.
+//  5. Would collide with an in-flight swap (we'd stop their target, or they're
 //     stopping us) — park in the queue for OnSwapDone to drain.
-//  5. Would evict a process that is still handling requests — park in the
+//  6. Would evict a process that is still handling requests — park in the
 //     queue. OnServeDone will retry when the busy process drains.
-//  6. Otherwise — start a new swap. This may run in parallel with other active
+//  7. Otherwise — start a new swap. This may run in parallel with other active
 //     swaps when their evict sets don't intersect.
 func (s *FIFO) OnRequest(req HandlerReq) {
 	// (1) Unknown model.
@@ -121,21 +124,31 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 		return
 	}
 
-	// (4) Collision with an in-flight swap — queue.
+	// (4) Load lock: refuse to start a model whose load is locked (globally or
+	// per-model). Models already running are unaffected: the join check above
+	// let requests for an in-flight swap through, the fast path served ready
+	// models, and a committed in-flight swap runs to completion.
+	if s.effects.LoadBlocked(req.Model) {
+		s.logger.Debugf("%s: load for model %s is locked; refusing request", s.name, req.Model)
+		s.grantError(req, swaputil.ModelLockedError{ModelID: req.Model})
+		return
+	}
+
+	// (5) Collision with an in-flight swap — queue.
 	if collidesWith(req.Model, evict, s.active) {
 		s.logger.Debugf("%s: queuing request for model %s (collides with in-flight swap)", s.name, req.Model)
 		s.enqueue(req)
 		return
 	}
 
-	// (5) Would evict a busy process — queue until it drains.
+	// (6) Would evict a busy process — queue until it drains.
 	if conflictsWithInFlight(evict, s.inFlight) {
 		s.logger.Debugf("%s: queuing request for model %s (would evict in-flight process)", s.name, req.Model)
 		s.enqueue(req)
 		return
 	}
 
-	// (6) Start a new (possibly parallel) swap.
+	// (7) Start a new (possibly parallel) swap.
 	s.logger.Debugf("%s: starting swap for model %s, evicting %v", s.name, req.Model, evict)
 	s.startSwap(req, evict, running)
 }
@@ -276,6 +289,14 @@ func (s *FIFO) OnShutdown(err error) {
 	for _, w := range s.queued {
 		s.grantError(w, err)
 	}
+}
+
+// OnLocksChanged re-runs the decision tree for queued requests after the
+// load-lock state changes: a queued request that would start a new load under
+// an engaged lock is rejected with the locked error, while joinable or
+// fast-pathable requests are granted as usual.
+func (s *FIFO) OnLocksChanged() {
+	s.drainQueue()
 }
 
 // grantHandler hands the caller a tracked handler for modelID and, only if the
@@ -423,6 +444,15 @@ func (s *FIFO) drainQueue() {
 		if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
 			s.logger.Debugf("%s: queued request for model %s now served fast-path", s.name, req.Model)
 			s.grantHandler(req, req.Model)
+			continue
+		}
+		// Load lock: a queued request whose load is now locked (globally or
+		// per-model) is rejected rather than held. Joinable and fast-pathable
+		// requests were handled above, so this only ever rejects a request
+		// that would start a new load.
+		if s.effects.LoadBlocked(req.Model) {
+			s.logger.Debugf("%s: load for model %s is locked; rejecting queued request", s.name, req.Model)
+			s.grantError(req, swaputil.ModelLockedError{ModelID: req.Model})
 			continue
 		}
 		if collidesWith(req.Model, evict, s.active) {

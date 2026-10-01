@@ -404,6 +404,10 @@ func (s *Server) routes() {
 	// API group (API-key protected) consumed by the UI.
 	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
 	mux.Handle("POST /api/models/unload/{model...}", apiChain.ThenFunc(s.handleAPIUnloadModel))
+	mux.Handle("POST /api/lock", apiChain.ThenFunc(s.handleAPIEngageGlobalLock))
+	mux.Handle("POST /api/lock/unlock", apiChain.ThenFunc(s.handleAPIReleaseGlobalLock))
+	mux.Handle("POST /api/models/lock/{model...}", apiChain.ThenFunc(s.handleAPILockModel))
+	mux.Handle("POST /api/models/unlock/{model...}", apiChain.ThenFunc(s.handleAPIUnlockModel))
 	mux.Handle("GET /api/profiles", apiChain.ThenFunc(s.handleAPIProfiles))
 	mux.Handle("PUT /api/profiles/active", apiChain.ThenFunc(s.handleAPIActiveProfile))
 	mux.Handle("POST /api/inflight/{id}/cancel", apiChain.ThenFunc(s.handleAPICancelInflight))

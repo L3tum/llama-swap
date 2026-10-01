@@ -44,6 +44,9 @@ export interface Model {
   targets?: string[];
   spillover?: number;
   vram_mb?: number;
+  // effective load-lock state (global lock or this model's own lock); only
+  // set for local models while the lock is engaged
+  locked?: boolean;
 }
 
 export interface Profile {
@@ -55,6 +58,12 @@ export interface Profile {
 export interface ProfileState {
   active: string | null;
   profiles: Profile[];
+}
+
+// Payload of the "loadLock" SSE event: the global load-lock flag. Per-model
+// lock state rides on each model's `locked` field in modelStatus.
+export interface LoadLockState {
+  global: boolean;
 }
 
 export interface TokenMetrics {
@@ -193,7 +202,7 @@ export interface PerformanceResponse {
 }
 
 export interface APIEventEnvelope {
-  type: "modelStatus" | "logData" | "activity" | "inflight" | "uiConfig" | "profileChanged" | "perfsys" | "perfgpu";
+  type: "modelStatus" | "logData" | "activity" | "inflight" | "uiConfig" | "profileChanged" | "loadLock" | "perfsys" | "perfgpu";
   data: string;
 }
 

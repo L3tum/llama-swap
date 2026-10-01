@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
@@ -68,6 +69,23 @@ type baseRouter struct {
 	// events are intentionally NOT signalled here so test event counts
 	// remain stable.
 	testProcessed chan struct{}
+
+	// Load-lock state. Runtime-only: it defaults to disengaged and is not
+	// persisted, so a reload starts unlocked. While the global lock is
+	// engaged, requests that would start loading a model that is not
+	// already running are rejected; a per-model lock rejects requests for
+	// that model the same way. Models that are already running keep being
+	// served.
+	lockMu     sync.RWMutex
+	globalLock bool
+	modelLocks map[string]bool
+
+	// lockCh wakes the run loop after a lock toggle so queued requests that
+	// would start a new load under the lock are rejected. Buffered (size 1)
+	// and sent non-blocking: a dropped signal is safe because a pending one
+	// already implies a sweep is coming, and every decision path re-checks
+	// LoadBlocked anyway.
+	lockCh chan struct{}
 }
 
 func newBaseRouter(
@@ -95,6 +113,8 @@ func newBaseRouter(
 		swapDoneCh:  make(chan scheduler.SwapDone),
 		serveDoneCh: make(chan scheduler.ServeDoneEvent),
 		runDone:     make(chan struct{}),
+		modelLocks:  make(map[string]bool),
+		lockCh:      make(chan struct{}, 1),
 	}
 	sched, err := scheduler.New(conf, name, logger, planner, b)
 	if err != nil {
@@ -130,6 +150,10 @@ func (b *baseRouter) run() {
 		case req := <-b.unloadCh:
 			b.schedule.OnUnload(req.targets, req.timeout)
 			close(req.respond)
+			b.notifyProcessed()
+
+		case <-b.lockCh:
+			b.schedule.OnLocksChanged()
 			b.notifyProcessed()
 
 		case ev := <-b.swapDoneCh:
@@ -461,6 +485,84 @@ func (b *baseRouter) sendUnload(targets []string, timeout time.Duration) {
 		return
 	}
 	<-req.respond
+}
+
+// EngageLoadLock engages the global load lock. While engaged, no model that
+// is not already running will be loaded in response to requests.
+func (b *baseRouter) EngageLoadLock() {
+	b.lockMu.Lock()
+	changed := !b.globalLock
+	b.globalLock = true
+	b.lockMu.Unlock()
+	if changed {
+		b.publishLockChanged()
+	}
+}
+
+// ReleaseLoadLock disengages the global load lock.
+func (b *baseRouter) ReleaseLoadLock() {
+	b.lockMu.Lock()
+	changed := b.globalLock
+	b.globalLock = false
+	b.lockMu.Unlock()
+	if changed {
+		b.publishLockChanged()
+	}
+}
+
+// LockModel engages the per-model load lock for modelID: requests for the
+// model are refused even while it is stopped, but a running instance keeps
+// serving.
+func (b *baseRouter) LockModel(modelID string) {
+	b.lockMu.Lock()
+	changed := !b.modelLocks[modelID]
+	b.modelLocks[modelID] = true
+	b.lockMu.Unlock()
+	if changed {
+		b.publishLockChanged()
+	}
+}
+
+// UnlockModel disengages the per-model load lock for modelID.
+func (b *baseRouter) UnlockModel(modelID string) {
+	b.lockMu.Lock()
+	changed := b.modelLocks[modelID]
+	delete(b.modelLocks, modelID)
+	b.lockMu.Unlock()
+	if changed {
+		b.publishLockChanged()
+	}
+}
+
+// publishLockChanged emits the event subscribers (SSE, other routers) use to
+// learn about the change and asks the run loop to sweep the request queue so
+// queued requests that would start a new load under the lock are rejected.
+// The lockCh send is non-blocking on a size-1 buffer: a dropped signal is
+// safe because a pending one already implies a sweep is coming, and every
+// decision path re-checks LoadBlocked, so the worst case is a delayed
+// rejection, never a load.
+func (b *baseRouter) publishLockChanged() {
+	event.Emit(swaputil.LoadChangedEvent{})
+	select {
+	case b.lockCh <- struct{}{}:
+	default:
+	}
+}
+
+// GlobalLockEngaged reports whether the global load lock is engaged.
+func (b *baseRouter) GlobalLockEngaged() bool {
+	b.lockMu.RLock()
+	defer b.lockMu.RUnlock()
+	return b.globalLock
+}
+
+// LoadBlocked reports whether loading modelID is currently blocked, either by
+// the global lock or by the model's own lock. It implements
+// scheduler.Effects.
+func (b *baseRouter) LoadBlocked(modelID string) bool {
+	b.lockMu.RLock()
+	defer b.lockMu.RUnlock()
+	return b.globalLock || b.modelLocks[modelID]
 }
 
 func (b *baseRouter) Shutdown(timeout time.Duration) error {

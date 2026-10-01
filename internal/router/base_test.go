@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
+	"github.com/mostlygeek/llama-swap/internal/event"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
@@ -751,5 +752,163 @@ func TestBaseRouter_Shutdown_ClosesProcesses(t *testing.T) {
 	}
 	if got := pb.closeCalls.Load(); got != 1 {
 		t.Errorf("b.closeCalls=%d want 1", got)
+	}
+}
+
+// TestBaseRouter_LockState verifies the load-lock API toggles the router's
+// effective lock state: global and per-model locks OR together, releasing
+// the global leaves per-model locks in place, and every toggle is a no-op
+// when the state already matches.
+func TestBaseRouter_LockState(t *testing.T) {
+	b := newTestBase(t, map[string]process.Process{
+		"a": newFakeProcess("a"),
+		"b": newFakeProcess("b"),
+	}, &stubPlanner{})
+
+	if b.GlobalLockEngaged() || b.LoadBlocked("a") || b.LoadBlocked("b") {
+		t.Fatal("fresh router should start unlocked")
+	}
+
+	b.EngageLoadLock()
+	if !b.GlobalLockEngaged() {
+		t.Fatal("GlobalLockEngaged()=false after EngageLoadLock")
+	}
+	if !b.LoadBlocked("a") || !b.LoadBlocked("b") {
+		t.Fatal("global lock must block every model")
+	}
+
+	b.EngageLoadLock() // no-op
+
+	b.LockModel("a")
+	if !b.LoadBlocked("a") {
+		t.Fatal("per-model lock must be effective")
+	}
+
+	b.ReleaseLoadLock()
+	if b.GlobalLockEngaged() {
+		t.Fatal("GlobalLockEngaged()=true after ReleaseLoadLock")
+	}
+	if !b.LoadBlocked("a") {
+		t.Fatal("per-model lock must survive global release")
+	}
+	if b.LoadBlocked("b") {
+		t.Fatal("b must be unblocked after global release")
+	}
+
+	b.UnlockModel("a")
+	if b.LoadBlocked("a") {
+		t.Fatal("LoadBlocked(a)=true after UnlockModel")
+	}
+
+	// No-op toggles leave state untouched.
+	b.ReleaseLoadLock()
+	b.UnlockModel("b")
+	if b.GlobalLockEngaged() || b.LoadBlocked("a") || b.LoadBlocked("b") {
+		t.Fatal("no-op toggles should leave the router unlocked")
+	}
+}
+
+// TestBaseRouter_LockEvents verifies a real lock-state change emits exactly
+// one LoadChangedEvent and that no-op toggles stay quiet.
+func TestBaseRouter_LockEvents(t *testing.T) {
+	b := newTestBase(t, map[string]process.Process{"a": newFakeProcess("a")}, &stubPlanner{})
+
+	changes := make(chan struct{}, 16)
+	unsub := event.On(func(swaputil.LoadChangedEvent) { changes <- struct{}{} })
+	defer unsub()
+
+	expect := func(name string) {
+		t.Helper()
+		select {
+		case <-changes:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: LoadChangedEvent not emitted", name)
+		}
+	}
+	expectNone := func(name string) {
+		t.Helper()
+		select {
+		case <-changes:
+			t.Fatalf("%s: unexpected LoadChangedEvent (no-op toggle must stay quiet)", name)
+		default:
+		}
+	}
+
+	b.EngageLoadLock()
+	expect("engage")
+
+	b.EngageLoadLock()
+	expectNone("double engage")
+
+	b.LockModel("a")
+	expect("lock model")
+
+	b.LockModel("a")
+	expectNone("double lock")
+
+	b.ReleaseLoadLock()
+	expect("release")
+
+	b.UnlockModel("a")
+	expect("unlock")
+
+	b.UnlockModel("a")
+	expectNone("double unlock")
+}
+
+// TestBaseRouter_LockRejectsQueuedRequest verifies the end-to-end path: a
+// request parked in the scheduler's queue is rejected with 423 when the load
+// lock is engaged, the rejection is delivered by the run loop's lock sweep,
+// and the in-flight swap of the first request is unaffected.
+func TestBaseRouter_LockRejectsQueuedRequest(t *testing.T) {
+	a := newFakeProcess("a")
+	bp := newFakeProcess("b")
+	b := newTestBase(t, map[string]process.Process{"a": a, "b": bp}, &stubPlanner{
+		evict: map[string][]string{"b": {"a"}}, // loading b evicts a
+	})
+
+	// Request 1 starts a's load; a never becomes ready on its own, so the
+	// swap stays in flight.
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		b.ServeHTTP(httptest.NewRecorder(), newRequest("a"))
+	}()
+	waitProcessed(t, b.testProcessed, 1)
+	waitSignal(t, a.runStarted, "a start")
+
+	// Request 2 wants b, which evicts a: it collides with a's in-flight swap
+	// and queues.
+	w := httptest.NewRecorder()
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		b.ServeHTTP(w, newRequest("b"))
+	}()
+	waitProcessed(t, b.testProcessed, 1)
+
+	// Engage the lock: the run loop sweeps the queue and rejects b.
+	b.EngageLoadLock()
+	select {
+	case <-bDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued request not rejected after lock engaged")
+	}
+
+	if w.Code != http.StatusLocked {
+		t.Fatalf("status=%d want 423 body=%q", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "model b is locked") {
+		t.Errorf("body=%q, want the locked error", w.Body.String())
+	}
+
+	// The lock is still engaged; the in-flight load of a is unaffected and
+	// completes once a becomes ready.
+	b.ReleaseLoadLock()
+	a.markReady()
+	select {
+	case <-aDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a's request did not complete after a became ready")
 	}
 }

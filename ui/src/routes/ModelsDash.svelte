@@ -4,9 +4,12 @@
   import { link } from "svelte-spa-router";
   import {
     activeProfile,
+    engageGlobalLock,
     fetchPlaygroundModels,
+    globalLock,
     models,
     profiles,
+    releaseGlobalLock,
     selectorModels,
     unloadAllModels,
   } from "../stores/api";
@@ -16,13 +19,14 @@
   import { formatVram } from "../lib/format";
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
+  import ModelLockButton from "../components/ModelLockButton.svelte";
   import InflightIndicator from "../components/InflightIndicator.svelte";
   import Tag from "../components/Tag.svelte";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Switch from "$lib/components/ui/switch/index.js";
   import * as Label from "$lib/components/ui/label/index.js";
-  import { PowerOff, Loader2, ExternalLink, SquareStack } from "@lucide/svelte";
+  import { PowerOff, Loader2, ExternalLink, SquareStack, Lock, LockOpen } from "@lucide/svelte";
   import { modelServerPath } from "../lib/modelUtils";
 
   let unloadingAll = $state(false);
@@ -56,6 +60,23 @@
       console.error(e);
     } finally {
       unloadingAll = false;
+    }
+  }
+
+  let lockingAll = $state(false);
+
+  async function handleLockToggle(): Promise<void> {
+    lockingAll = true;
+    try {
+      if ($globalLock) {
+        await releaseGlobalLock();
+      } else {
+        await engageGlobalLock();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      lockingAll = false;
     }
   }
 </script>
@@ -111,6 +132,7 @@
       >
         <ExternalLink class="size-4" />
       </a>
+      <ModelLockButton {model} globalLocked={$globalLock} />
       <ModelLoadButton {model} />
     {/if}
   </div>
@@ -175,6 +197,22 @@
           <Button
             variant="outline"
             size="sm"
+            onclick={handleLockToggle}
+            disabled={lockingAll}
+            title={$globalLock ? "No models will load while the lock is engaged" : "Engage the global load lock"}
+          >
+            {#if lockingAll}
+              <Loader2 class="size-3.5 animate-spin" />
+            {:else if $globalLock}
+              <Lock class="size-3.5" />
+            {:else}
+              <LockOpen class="size-3.5" />
+            {/if}
+            {$globalLock ? "Unlock All" : "Lock All"}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onclick={handleUnloadAll}
             disabled={!anyReady || unloadingAll}
           >
@@ -236,6 +274,7 @@
                         class="min-w-0 flex-1 truncate text-sm hover:text-foreground hover:underline"
                       >{target}</a>
                       {#if !targetModel.peerID}
+                        <ModelLockButton model={targetModel} globalLocked={$globalLock} />
                         <ModelLoadButton model={targetModel} />
                       {/if}
                     {:else}
