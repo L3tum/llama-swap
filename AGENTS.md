@@ -2,7 +2,7 @@
 
 Only use these technologies:
 
-- Go 1.26+
+- Go 1.27+
 - Typescript, Vite and Svelte 5 for UI (ui/)
 - Docker
 - Kubernetes (API, e.g. client-go) for cmd/kubeswap ONLY

@@ -103,32 +103,7 @@ A project's build inputs are therefore exactly two files — its own Dockerfile
 and its install script — plus the tag of the base it compiles from. Nothing has
 to be inferred from a shared file.
 
-### How CI builds it
-
-Compiling every project in one job put five concurrent CUDA builds on a
-four-core runner and stopped fitting in the 6h GitHub Actions job limit. Worse,
-a cancelled job never reaches its cache export, so nothing was cached and the
-next night rebuilt everything again — one overrun kept every later run failing.
-
-`unified-docker.yml` gives each piece its own job and its own 6h budget:
-
-```
-setup ── resolve every upstream ref once, fix the date tag
-  ├─ cuda ─── amd64 ── base ── whisper sd audio llama ik-llama ── assemble ─┬─ manifest
-  ├─ cuda13 ┬ amd64 ── base ── whisper sd audio llama ik-llama ── assemble ─┤
-  │         └ arm64 ── base ── whisper sd audio llama ik-llama ── assemble ─┼─ manifest
-  └─ vulkan ─ amd64 ── base ── whisper sd audio llama ik-llama ── assemble ─┴─ manifest
-```
-
-Platforms are a matrix over the same backend workflow, so a variant's chain is
-per-platform and the manifest job waits for every one of them.
-
-Each variant is a separate call to `unified-docker-backend.yml`, which holds
-the base → projects → assemble chain for one variant. They are separate calls
-rather than one matrix because `needs` applies to a whole job, not to
-individual matrix cells: sharing a job graph would keep every variant waiting
-on the slowest one to finish before any of them could publish, and
-ik_llama.cpp alone takes hours to compile on every backend.
+### How builds are cached
 
 Every image is addressed by its content, so anything unchanged is skipped:
 
@@ -147,8 +122,7 @@ Which gives, concretely:
 | the built-in `CMAKE_CUDA_ARCHITECTURES`/`CUDA_VERSION` default for one variant, in `build-image.sh` | that variant only, and only the platform whose default changed |
 | `base-vulkan.Dockerfile` | the Vulkan base and all 4 Vulkan projects; no CUDA |
 
-and means a project that overruns its own job no longer discards the ones that
-finished, reruns are idempotent, and a failed assemble can be retried without
+Reruns are idempotent, and a failed assemble can be retried without
 recompiling anything.
 
 ### Driving it by hand

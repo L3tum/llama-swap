@@ -18,7 +18,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build the Go binary (multi-arch aware)
 # ---------------------------------------------------------------------------
-FROM golang:1.26.1-alpine AS go-builder
+FROM golang:1.27.1-alpine AS go-builder
 
 # Install build dependencies: npm for Svelte UI, git for module resolution,
 # make for the build system, musl-dev for static linking.
